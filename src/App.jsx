@@ -4,7 +4,11 @@ import { io } from 'socket.io-client';
 const QUESTION_VALUES = [100, 200, 300, 400, 500];
 const STORAGE_KEY = 'jeopardy-session';
 
-const socket = io(import.meta.env.VITE_SERVER_URL || 'http://localhost:3001', {
+const socketUrl =
+  import.meta.env.VITE_SERVER_URL ||
+  (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3001');
+
+const socket = io(socketUrl, {
   autoConnect: true
 });
 
