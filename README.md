@@ -64,7 +64,7 @@ This app is designed as a single web service, so every player can open one publi
 
 ### Option A: Blueprint deploy (`render.yaml`)
 
-1. Push this folder to GitHub (e.g. `kjaisingh/jeopardy-online`)
+1. Push this folder to GitHub.
 2. In Render, choose **New +** → **Blueprint**
 3. Select your GitHub repo
 4. Render reads `render.yaml` and deploys automatically
@@ -90,19 +90,6 @@ Notes:
 - Free plan works for testing, but can sleep when idle and take time to wake up
 - Starter plan is low-cost and avoids sleep, which is better for live game sessions
 - No mobile app install is needed; everyone joins from browser by room code
-
-## Publish to GitHub
-
-From the `jeopardy` folder:
-
-```bash
-git init
-git add .
-git commit -m "Initial Jeopardy Online app"
-git branch -M main
-git remote add origin https://github.com/kjaisingh/jeopardy-online.git
-git push -u origin main
-```
 
 ## Gameplay Summary
 
