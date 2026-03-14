@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: jeopardy-online
+    env: node
+    plan: free
+    autoDeploy: true
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: CLIENT_URL
+        value: https://jeopardy-online.onrender.com
