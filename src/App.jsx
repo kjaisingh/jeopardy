@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { io } from 'socket.io-client';
 
 const QUESTION_VALUES = [100, 200, 300, 400, 500];
-const STORAGE_KEY = 'jeopardy-online-session';
+const STORAGE_KEY = 'jeopardy-session';
 
 const socket = io(import.meta.env.VITE_SERVER_URL || 'http://localhost:3001', {
   autoConnect: true
@@ -310,7 +310,7 @@ function App() {
     return (
       <div className="app home-screen">
         <div className="card home-card">
-          <h1>Jeopardy Online</h1>
+          <h1>Jeopardy</h1>
           <p className="subtitle">Create a room, share the code, and play on one host screen.</p>
 
           <label>Name</label>

@@ -1,5 +1,4 @@
-# Jeopardy Online
-
+# Jeopardy
 A realtime Jeopardy-style web app where every player joins by code, submits 5 Q/A prompts, and the host runs the board from one screen.
 
 ## Features
