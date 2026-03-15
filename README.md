@@ -1,6 +1,7 @@
 # Jeopardy
 Welcome to a highly interactive, custom Jeopardy experience designed to make game nights, parties, and remote hangouts incredibly engaging. Unlike traditional trivia games where the questions are pre-written and static, this game relies entirely on the creativity of its players to build the ultimate challenge.
 
+
 ## Overview
 - **Gather and Join**: One person acts as the host and creates a game room on a main screen, generating a simple six-character code. Everyone else simply opens the website on their own smartphones, tablets, or laptops and enters the code to join the lobby.
 - **Build the Board**: Once you are in, the game asks you to come up with five unique trivia questions and answers. You will assign each of your questions a difficulty value ranging from 100 to 500 points, and together, everyone's submissions automatically build the custom Jeopardy board for that match.
@@ -15,13 +16,12 @@ Welcome to a highly interactive, custom Jeopardy experience designed to make gam
 - Sound effects for answers, as well as background music.
 - Double points on a random question each round.
 - Media inputs (image, audio, etc) to be included with questions.
+- Optional timer to limit how long teams have to answer.
 - LLM-based validator for answer correctness.
 - LLM-based question generation advisor to help players come up with questions.
-- Option to subtract points for incorrect answers.
-- Option for a timer to limit how long teams have to answer.
 
 
-## Stack
+## Tech Stack
 - Frontend: React + Vite.
 - Backend: Node.js + Express + Socket.IO.
 - Realtime transport: WebSockets (Socket.IO).
@@ -57,7 +57,7 @@ The server runs on `PORT` (default `3001`) and serves the built frontend from `d
 ## Deployment
 This app is designed as a single web service, so every player can open one public URL from their phones.
 
-### Blueprint Deploy
+### Blueprint
 1. Push this folder to GitHub.
 2. In Render, choose **New +** → **Blueprint**.
 3. Select your GitHub repo.
