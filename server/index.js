@@ -11,6 +11,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const httpServer = createServer(app);
+const persistenceWarning = gameStore.persistenceConfigError();
 
 app.use(
   cors({
@@ -20,7 +21,10 @@ app.use(
 app.use(express.json());
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true });
+  res.json({
+    ok: true,
+    persistenceEnabled: gameStore.persistenceEnabled()
+  });
 });
 
 const io = new Server(httpServer, {
@@ -39,9 +43,9 @@ const emitError = (socket, error) => {
 };
 
 io.on('connection', (socket) => {
-  socket.on('room:create', ({ name }, ack) => {
+  socket.on('room:create', async ({ name }, ack) => {
     try {
-      const result = gameStore.createRoom(name, socket.id);
+      const result = await gameStore.createRoom(name, socket.id);
       socket.join(result.code);
       ack({ ok: true, code: result.code, playerId: result.playerId, room: result.room });
       sendRoom(result.code, result.room);
@@ -50,9 +54,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('room:join', ({ code, name }, ack) => {
+  socket.on('room:join', async ({ code, name }, ack) => {
     try {
-      const result = gameStore.joinRoom(code, name, socket.id);
+      const result = await gameStore.joinRoom(code, name, socket.id);
       socket.join(result.code);
       ack({ ok: true, code: result.code, playerId: result.playerId, room: result.room });
       sendRoom(result.code, result.room);
@@ -61,9 +65,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('room:reconnect', ({ code, playerId }, ack) => {
+  socket.on('room:reconnect', async ({ code, playerId }, ack) => {
     try {
-      const result = gameStore.reconnect(code, playerId, socket.id);
+      const result = await gameStore.reconnect(code, playerId, socket.id);
       socket.join(result.code);
       ack({ ok: true, room: result.room });
       sendRoom(result.code, result.room);
@@ -72,9 +76,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('questions:submit', ({ code, playerId, questions }, ack) => {
+  socket.on('questions:submit', async ({ code, playerId, questions }, ack) => {
     try {
-      const room = gameStore.submitQuestions(code, playerId, questions);
+      const room = await gameStore.submitQuestions(code, playerId, questions);
       ack({ ok: true });
       sendRoom(code.toUpperCase(), room);
     } catch (error) {
@@ -82,9 +86,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('game:configure', ({ code, playerId, config }, ack) => {
+  socket.on('game:configure', async ({ code, playerId, config }, ack) => {
     try {
-      const room = gameStore.setTeamsAndSettings(code, playerId, config);
+      const room = await gameStore.setTeamsAndSettings(code, playerId, config);
       ack({ ok: true });
       sendRoom(code.toUpperCase(), room);
     } catch (error) {
@@ -92,9 +96,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('question:select', ({ code, playerId, ownerPlayerId, value }, ack) => {
+  socket.on('team:score:set', async ({ code, playerId, teamId, score }, ack) => {
     try {
-      const room = gameStore.selectQuestion(code, playerId, ownerPlayerId, value);
+      const room = await gameStore.setTeamScore(code, playerId, teamId, score);
       ack({ ok: true });
       sendRoom(code.toUpperCase(), room);
     } catch (error) {
@@ -102,9 +106,19 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('question:attempt', ({ code, playerId, answer }, ack) => {
+  socket.on('question:select', async ({ code, playerId, ownerPlayerId, value }, ack) => {
     try {
-      const { room, result } = gameStore.submitAttempt(code, playerId, answer);
+      const room = await gameStore.selectQuestion(code, playerId, ownerPlayerId, value);
+      ack({ ok: true });
+      sendRoom(code.toUpperCase(), room);
+    } catch (error) {
+      ack({ ok: false, message: error.message });
+    }
+  });
+
+  socket.on('question:attempt', async ({ code, playerId, answer }, ack) => {
+    try {
+      const { room, result } = await gameStore.submitAttempt(code, playerId, answer);
       ack({ ok: true, result });
       sendRoom(code.toUpperCase(), room);
     } catch (error) {
@@ -112,9 +126,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('question:override', ({ code, playerId }, ack) => {
+  socket.on('question:override', async ({ code, playerId }, ack) => {
     try {
-      const room = gameStore.overrideLastIncorrect(code, playerId);
+      const room = await gameStore.overrideLastIncorrect(code, playerId);
       ack({ ok: true });
       sendRoom(code.toUpperCase(), room);
     } catch (error) {
@@ -122,9 +136,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('question:pass', ({ code, playerId }, ack) => {
+  socket.on('question:pass', async ({ code, playerId }, ack) => {
     try {
-      const room = gameStore.passActiveQuestion(code, playerId);
+      const room = await gameStore.passActiveQuestion(code, playerId);
       ack({ ok: true });
       sendRoom(code.toUpperCase(), room);
     } catch (error) {
@@ -134,7 +148,7 @@ io.on('connection', (socket) => {
 
   socket.on('game:restart', async ({ code, playerId }, ack) => {
     try {
-      const restarted = gameStore.restartGame(code, playerId);
+      const restarted = await gameStore.restartGame(code, playerId);
       const sockets = await io.in(code.toUpperCase()).fetchSockets();
       await Promise.all(sockets.map((entry) => entry.leave(code.toUpperCase())));
       await Promise.all(sockets.map((entry) => entry.join(restarted.newCode)));
@@ -171,4 +185,7 @@ app.get('*', (_req, res) => {
 const port = Number(process.env.PORT || 3001);
 httpServer.listen(port, () => {
   console.log(`Jeopardy server listening on port ${port}`);
+  if (persistenceWarning) {
+    console.warn(persistenceWarning);
+  }
 });

@@ -41,8 +41,10 @@ function App() {
   const [room, setRoom] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [suppressAutoResume, setSuppressAutoResume] = useState(false);
 
-  const [homeName, setHomeName] = useState('');
+  const [createName, setCreateName] = useState('');
+  const [joinName, setJoinName] = useState('');
   const [joinCode, setJoinCode] = useState('');
 
   const [drafts, setDrafts] = useState(blankDraft);
@@ -55,12 +57,61 @@ function App() {
 
   const [activeAnswerInput, setActiveAnswerInput] = useState('');
   const [lastResult, setLastResult] = useState('');
+  const [pendingIncorrect, setPendingIncorrect] = useState(null);
+  const [flashQueue, setFlashQueue] = useState([]);
+  const [activeFlash, setActiveFlash] = useState(null);
+  const [scoreEditMode, setScoreEditMode] = useState(false);
+  const [scoreDrafts, setScoreDrafts] = useState({});
 
   const me = useMemo(
     () => room?.players.find((player) => player.id === session?.playerId) || null,
     [room, session]
   );
   const isHost = Boolean(room && session && room.hostPlayerId === session.playerId);
+
+  const enqueueFlash = (type, text) => {
+    setFlashQueue((current) => [...current, { id: crypto.randomUUID(), type, text }]);
+  };
+
+  const reconnectSession = async (nextSession, shouldResetOnFailure = false) => {
+    if (!nextSession?.code || !nextSession?.playerId) {
+      return false;
+    }
+
+    try {
+      const response = await call('room:reconnect', {
+        code: nextSession.code,
+        playerId: nextSession.playerId
+      });
+      setRoom(response.room);
+      setError('');
+      return true;
+    } catch (_requestError) {
+      if (shouldResetOnFailure) {
+        setSession(null);
+        setRoom(null);
+      }
+      return false;
+    }
+  };
+
+  useEffect(() => {
+    if (activeFlash || !flashQueue.length) return;
+
+    const [nextFlash, ...rest] = flashQueue;
+    setActiveFlash(nextFlash);
+    setFlashQueue(rest);
+  }, [flashQueue, activeFlash]);
+
+  useEffect(() => {
+    if (!activeFlash) return undefined;
+
+    const timeout = window.setTimeout(() => {
+      setActiveFlash(null);
+    }, 1300);
+
+    return () => window.clearTimeout(timeout);
+  }, [activeFlash]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
@@ -76,61 +127,109 @@ function App() {
       setError(payload?.message || 'Unexpected error');
     };
 
+    const onConnect = () => {
+      if (suppressAutoResume) return;
+      reconnectSession(session, true);
+    };
+
     socket.on('room:updated', onRoom);
     socket.on('room:error', onError);
+    socket.on('connect', onConnect);
 
-    if (session?.code && session?.playerId) {
-      call('room:reconnect', { code: session.code, playerId: session.playerId })
-        .then((response) => {
-          setRoom(response.room);
-        })
-        .catch(() => {
-          setSession(null);
-          setRoom(null);
-        });
+    if (socket.connected) {
+      onConnect();
     }
 
     return () => {
       socket.off('room:updated', onRoom);
       socket.off('room:error', onError);
+      socket.off('connect', onConnect);
     };
-  }, []);
+  }, [session, suppressAutoResume]);
 
   useEffect(() => {
-    if (room?.phase === 'team-setup' && isHost) {
-      setTeamConfig((current) => {
-        if (current.length) return current;
-        const players = room.players.map((player) => player.id);
-        const teams = Array.from({ length: 2 }, (_, index) => ({
-          id: crypto.randomUUID(),
-          name: `Team ${index + 1}`,
-          playerIds: []
-        }));
+    if (room?.phase !== 'team-setup' || !isHost) return;
 
-        players.forEach((playerId, index) => {
-          teams[index % 2].playerIds.push(playerId);
-        });
-        return teams;
+    setTeamConfig((current) => {
+      const roomIds = new Set(room.players.map((player) => player.id));
+      const configuredIds = new Set(current.flatMap((team) => team.playerIds));
+      const coversRoomExactly =
+        current.length > 0 &&
+        roomIds.size === configuredIds.size &&
+        [...roomIds].every((id) => configuredIds.has(id)) &&
+        [...configuredIds].every((id) => roomIds.has(id));
+
+      if (coversRoomExactly) return current;
+
+      const playerIds = room.players.map((player) => player.id);
+      const teamCountSafe = Math.max(1, teamCount);
+      const teams = Array.from({ length: teamCountSafe }, (_, index) => ({
+        id: crypto.randomUUID(),
+        name: `Team ${index + 1}`,
+        playerIds: []
+      }));
+
+      playerIds.forEach((playerId, index) => {
+        teams[index % teamCountSafe].playerIds.push(playerId);
       });
-    }
-  }, [room, isHost]);
+      return teams;
+    });
+  }, [room, isHost, teamCount]);
+
+  useEffect(() => {
+    const nextDrafts = Object.fromEntries((room?.teams || []).map((team) => [team.id, String(team.score)]));
+    setScoreDrafts(nextDrafts);
+  }, [room?.teams]);
 
   const resetToHome = () => {
-    setSession(null);
+    setSuppressAutoResume(true);
     setRoom(null);
     setError('');
-    setHomeName('');
+    setCreateName('');
+    setJoinName('');
     setJoinCode('');
     setDrafts(blankDraft());
     setLastResult('');
     setActiveAnswerInput('');
+    setPendingIncorrect(null);
+    setFlashQueue([]);
+    setActiveFlash(null);
+    setScoreEditMode(false);
+    setScoreDrafts({});
+    setTeamConfig([]);
+    setTeamCount(2);
+    setRoundMode('finite');
+    setRoundCount(1);
+  };
+
+  const leaveCompletely = () => {
+    setSuppressAutoResume(false);
+    setSession(null);
+    setRoom(null);
+    setError('');
+    setCreateName('');
+    setJoinName('');
+    setJoinCode('');
+    setDrafts(blankDraft());
+    setLastResult('');
+    setActiveAnswerInput('');
+    setPendingIncorrect(null);
+    setFlashQueue([]);
+    setActiveFlash(null);
+    setScoreEditMode(false);
+    setScoreDrafts({});
+    setTeamConfig([]);
+    setTeamCount(2);
+    setRoundMode('finite');
+    setRoundCount(1);
   };
 
   const createRoom = async () => {
     try {
       setError('');
       setLoading(true);
-      const response = await call('room:create', { name: homeName.trim() });
+      setSuppressAutoResume(false);
+      const response = await call('room:create', { name: createName.trim() });
       setSession({ code: response.code, playerId: response.playerId });
       setRoom(response.room);
     } catch (requestError) {
@@ -144,7 +243,8 @@ function App() {
     try {
       setError('');
       setLoading(true);
-      const response = await call('room:join', { code: joinCode.trim().toUpperCase(), name: homeName.trim() });
+      setSuppressAutoResume(false);
+      const response = await call('room:join', { code: joinCode.trim().toUpperCase(), name: joinName.trim() });
       setSession({ code: response.code, playerId: response.playerId });
       setRoom(response.room);
     } catch (requestError) {
@@ -156,6 +256,21 @@ function App() {
 
   const updateDraft = (localId, key, value) => {
     setDrafts((current) => current.map((entry) => (entry.localId === localId ? { ...entry, [key]: value } : entry)));
+  };
+
+  const resumePreviousGame = async () => {
+    try {
+      setError('');
+      setLoading(true);
+      const resumed = await reconnectSession(session, true);
+      if (resumed) {
+        setSuppressAutoResume(false);
+      } else {
+        setSuppressAutoResume(false);
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const updateDraftValue = (localId, value) => {
@@ -234,11 +349,31 @@ function App() {
     }
   };
 
+  const updateScoreDraft = (teamId, value) => {
+    setScoreDrafts((current) => ({ ...current, [teamId]: value }));
+  };
+
+  const saveTeamScore = async (teamId) => {
+    try {
+      setError('');
+      await call('team:score:set', {
+        code: room.code,
+        playerId: session.playerId,
+        teamId,
+        score: Number(scoreDrafts[teamId] ?? 0)
+      });
+      setLastResult('Score updated.');
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  };
+
   const selectQuestion = async (ownerPlayerId, value) => {
     try {
       setError('');
       setLastResult('');
       setActiveAnswerInput('');
+      setPendingIncorrect(null);
       await call('question:select', { code: room.code, playerId: session.playerId, ownerPlayerId, value });
     } catch (requestError) {
       setError(requestError.message);
@@ -248,6 +383,11 @@ function App() {
   const submitAttempt = async () => {
     try {
       setError('');
+      const currentTeamName = teamMap[nextTeamId]?.name || 'That team';
+      if (pendingIncorrect) {
+        enqueueFlash('incorrect', 'INCORRECT!');
+        setPendingIncorrect(null);
+      }
       const response = await call('question:attempt', {
         code: room.code,
         playerId: session.playerId,
@@ -255,10 +395,13 @@ function App() {
       });
 
       if (response.result.isCorrect) {
+        enqueueFlash('correct', 'CORRECT!');
         setLastResult(`${response.result.teamName} is correct! +${response.result.value}`);
       } else if (response.result.exhausted) {
+        enqueueFlash('incorrect', 'INCORRECT!');
         setLastResult('No team answered correctly. Question expired.');
       } else {
+        setPendingIncorrect({ teamName: currentTeamName });
         const nextTeam = room.teams.find((team) => team.id === response.result.nextTeamId);
         setLastResult(`Incorrect. Passing to ${nextTeam?.name || 'next team'}.`);
       }
@@ -271,7 +414,9 @@ function App() {
   const overrideIncorrect = async () => {
     try {
       setError('');
+      setPendingIncorrect(null);
       await call('question:override', { code: room.code, playerId: session.playerId });
+      enqueueFlash('correct', 'CORRECT!');
       setLastResult('Override accepted. Points awarded.');
     } catch (requestError) {
       setError(requestError.message);
@@ -281,6 +426,10 @@ function App() {
   const passQuestion = async () => {
     try {
       setError('');
+      if (pendingIncorrect) {
+        enqueueFlash('incorrect', 'INCORRECT!');
+        setPendingIncorrect(null);
+      }
       await call('question:pass', { code: room.code, playerId: session.playerId });
       setLastResult('Question passed with no points.');
     } catch (requestError) {
@@ -309,7 +458,9 @@ function App() {
     : null;
 
   if (!room || !session) {
-    const ready = homeName.trim().length > 1;
+    const createReady = createName.trim().length > 1;
+    const joinReady = joinName.trim().length > 1;
+    const canResume = Boolean(session?.code && session?.playerId);
 
     return (
       <div className="app home-screen">
@@ -318,10 +469,10 @@ function App() {
           <p className="subtitle">Create a room, share the code, and play on one host screen.</p>
 
           <label>Name</label>
-          <input value={homeName} onChange={(event) => setHomeName(event.target.value)} placeholder="Your name" />
+          <input value={createName} onChange={(event) => setCreateName(event.target.value)} placeholder="Your name" />
 
           <div className="actions">
-            <button disabled={!ready || loading} onClick={createRoom}>
+            <button disabled={!createReady || loading} onClick={createRoom}>
               Create Game
             </button>
           </div>
@@ -335,9 +486,23 @@ function App() {
             placeholder="ABC123"
             maxLength={6}
           />
-          <button className="secondary" disabled={!ready || joinCode.length < 6 || loading} onClick={joinRoom}>
+          <label>Name</label>
+          <input value={joinName} onChange={(event) => setJoinName(event.target.value)} placeholder="Your name" />
+          <button className="secondary" disabled={!joinReady || joinCode.length < 6 || loading} onClick={joinRoom}>
             Join Game
           </button>
+
+          {canResume && (
+            <>
+              <div className="join-divider">or resume previous game</div>
+              <button className="secondary" disabled={loading} onClick={resumePreviousGame}>
+                Resume Previous Game ({session.code})
+              </button>
+              <button className="secondary subtle" disabled={loading} onClick={leaveCompletely}>
+                Forget Saved Session
+              </button>
+            </>
+          )}
 
           {error && <div className="error">{error}</div>}
         </div>
@@ -348,6 +513,25 @@ function App() {
   const allSubmitted = room.players.every((player) => player.submitted);
   const currentTeam = room.turnTeamId ? teamMap[room.turnTeamId] : null;
   const winnerTeam = room.winnerTeamId ? teamMap[room.winnerTeamId] : null;
+  const renderScoreCard = (team, emphasizeTurn = false) => (
+    <div key={team.id} className={`score-card ${emphasizeTurn && room.turnTeamId === team.id ? 'active' : ''}`}>
+      <div>{team.name}</div>
+      {isHost && scoreEditMode ? (
+        <div className="score-editor">
+          <input
+            type="number"
+            value={scoreDrafts[team.id] ?? String(team.score)}
+            onChange={(event) => updateScoreDraft(team.id, event.target.value)}
+          />
+          <button className="secondary" onClick={() => saveTeamScore(team.id)}>
+            Save
+          </button>
+        </div>
+      ) : (
+        <strong>{team.score}</strong>
+      )}
+    </div>
+  );
 
   return (
     <div className="app">
@@ -362,9 +546,14 @@ function App() {
             {me?.name} {isHost ? '(Host)' : ''}
           </div>
         </div>
-        <button className="secondary" onClick={resetToHome}>
-          Leave
-        </button>
+        <div className="topbar-actions">
+          <button className="secondary" onClick={resetToHome}>
+            Go Home
+          </button>
+          <button className="secondary subtle" onClick={leaveCompletely}>
+            Leave Completely
+          </button>
+        </div>
       </header>
 
       {room.phase === 'lobby' && (
@@ -501,8 +690,10 @@ function App() {
                         }
                       />
                       <div className="team-members">
-                        {team.playerIds.map((playerId) => room.players.find((player) => player.id === playerId)?.name).join(', ') ||
-                          'No players'}
+                        {team.playerIds
+                          .map((playerId) => room.players.find((player) => player.id === playerId)?.name)
+                          .filter(Boolean)
+                          .join(', ') || 'No players'}
                       </div>
                     </div>
                   ))}
@@ -522,13 +713,15 @@ function App() {
               <h2>Game Board</h2>
               <div className="subtitle">Turn to choose: {currentTeam?.name || '-'}</div>
             </div>
-            <div className="score-row">
-              {room.teams.map((team) => (
-                <div key={team.id} className={`score-card ${room.turnTeamId === team.id ? 'active' : ''}`}>
-                  <div>{team.name}</div>
-                  <strong>{team.score}</strong>
+            <div className="board-side">
+              {isHost && (
+                <div className="score-actions">
+                  <button className="secondary" onClick={() => setScoreEditMode((current) => !current)}>
+                    {scoreEditMode ? 'Done Editing Scores' : 'Edit Scores'}
+                  </button>
                 </div>
-              ))}
+              )}
+              <div className="score-row">{room.teams.map((team) => renderScoreCard(team, true))}</div>
             </div>
           </div>
 
@@ -558,14 +751,7 @@ function App() {
               <p className="subtitle">
                 Winner: <strong>{winnerTeam?.name || 'Tie'}</strong>
               </p>
-              <div className="score-row">
-                {room.teams.map((team) => (
-                  <div key={team.id} className="score-card">
-                    <div>{team.name}</div>
-                    <strong>{team.score}</strong>
-                  </div>
-                ))}
-              </div>
+              <div className="score-row">{room.teams.map((team) => renderScoreCard(team, false))}</div>
               {isHost && <button onClick={restartGame}>Restart with New Code</button>}
             </div>
           )}
@@ -606,6 +792,12 @@ function App() {
             )}
           </div>
         </section>
+      )}
+
+      {activeFlash && (
+        <div className={`result-flash ${activeFlash.type}`}>
+          <div className="result-flash-text">{activeFlash.text}</div>
+        </div>
       )}
 
       {error && <div className="error sticky">{error}</div>}

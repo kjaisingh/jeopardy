@@ -93,6 +93,11 @@ button.secondary {
   border-color: #435dd3;
 }
 
+button.subtle {
+  background: #0b1647;
+  border-color: #2f438f;
+}
+
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -139,6 +144,17 @@ button:disabled {
   align-items: center;
   gap: 14px;
   flex-wrap: wrap;
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.topbar-actions > * {
+  width: auto;
+  min-width: 160px;
 }
 
 .label {
@@ -296,6 +312,18 @@ button:disabled {
   align-items: flex-start;
 }
 
+.board-side {
+  display: grid;
+  gap: 10px;
+  justify-items: end;
+}
+
+.score-actions {
+  width: 100%;
+  display: flex;
+  justify-content: flex-end;
+}
+
 .score-row {
   display: flex;
   gap: 8px;
@@ -308,11 +336,22 @@ button:disabled {
   background: #0c1b58;
   padding: 8px 12px;
   min-width: 120px;
+  display: grid;
+  gap: 8px;
 }
 
 .score-card.active {
   border-color: #ffdd64;
   background: #3c2f05;
+}
+
+.score-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.score-editor input {
+  min-width: 120px;
 }
 
 .board-grid {
@@ -395,6 +434,44 @@ button:disabled {
   padding: 14px;
 }
 
+.result-flash {
+  position: fixed;
+  inset: 0;
+  z-index: 320;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  padding: 24px;
+}
+
+.result-flash-text {
+  min-width: min(560px, 100%);
+  max-width: 100%;
+  text-align: center;
+  font-family: 'Trebuchet MS', Inter, sans-serif;
+  font-size: clamp(2.5rem, 8vw, 5rem);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  padding: 24px 28px;
+  border-radius: 22px;
+  border: 3px solid transparent;
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.5);
+}
+
+.result-flash.correct .result-flash-text {
+  color: #f7fff9;
+  background: linear-gradient(180deg, #18b861, #0f8f4b);
+  border-color: #8effba;
+  text-shadow: 0 0 18px rgba(255, 255, 255, 0.35);
+}
+
+.result-flash.incorrect .result-flash-text {
+  color: #fff5f6;
+  background: linear-gradient(180deg, #e3414f, #b82735);
+  border-color: #ff9aa2;
+  text-shadow: 0 0 18px rgba(255, 255, 255, 0.2);
+}
+
 @media (max-width: 900px) {
   .team-layout,
   .board-top {
@@ -439,5 +516,13 @@ button:disabled {
 
   .player-row {
     grid-template-columns: 1fr;
+  }
+
+  .topbar-actions {
+    width: 100%;
+  }
+
+  .topbar-actions > * {
+    width: 100%;
   }
 }

@@ -34,12 +34,19 @@ Welcome to a highly interactive, custom Jeopardy experience designed to make gam
 npm install
 ```
 
-2. Start backend + frontend.
+2. Create a local env file.
+```bash
+cp .env.example .env
+```
+
+3. In Supabase, run the SQL in `supabase/schema.sql`, then paste your project values into `.env`.
+
+4. Start backend + frontend.
 ```bash
 npm run dev
 ```
 
-3. Open app.
+5. Open app.
 ```bash
 http://localhost:5173
 ```
@@ -74,3 +81,7 @@ This app is designed as a single web service, so every player can open one publi
 - `PORT`: backend port.
 - `CLIENT_URL`: allowed frontend origin for Socket.IO CORS.
 - `VITE_SERVER_URL`: client socket server URL in local development.
+- `SUPABASE_URL`: Supabase project URL for durable room persistence.
+- `SUPABASE_SERVICE_ROLE_KEY`: server-only key used by the Node backend to save and restore room state.
+
+If the Supabase variables are omitted, the app still runs, but room persistence falls back to in-memory only and active games will not survive a server restart.

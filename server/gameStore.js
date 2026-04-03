@@ -1,5 +1,6 @@
 import { customAlphabet } from 'nanoid';
 import { isAnswerCorrect } from './match.js';
+import { roomRepository } from './roomRepository.js';
 
 const makeCode = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 6);
 const QUESTION_VALUES = [100, 200, 300, 400, 500];
@@ -7,6 +8,52 @@ const QUESTION_VALUES = [100, 200, 300, 400, 500];
 const rooms = new Map();
 
 const byName = (left, right) => left.name.localeCompare(right.name);
+
+const toStoredPlayer = (player) => ({
+  id: player.id,
+  name: player.name,
+  submitted: Boolean(player.submitted),
+  questions: Array.isArray(player.questions) ? player.questions : []
+});
+
+const serializeRoom = (room) => ({
+  code: room.code,
+  hostPlayerId: room.hostPlayerId,
+  phase: room.phase,
+  players: [...room.players.values()].map(toStoredPlayer),
+  settings: room.settings,
+  teams: room.teams,
+  turnTeamId: room.turnTeamId,
+  board: room.board,
+  activeQuestion: room.activeQuestion,
+  lastWrongAttempt: room.lastWrongAttempt,
+  winnerTeamId: room.winnerTeamId
+});
+
+const deserializeRoom = (snapshot) => ({
+  code: snapshot.code,
+  hostPlayerId: snapshot.hostPlayerId,
+  phase: snapshot.phase || 'lobby',
+  players: new Map(
+    (snapshot.players || []).map((player) => [
+      player.id,
+      {
+        id: player.id,
+        name: player.name,
+        socketId: null,
+        submitted: Boolean(player.submitted),
+        questions: Array.isArray(player.questions) ? player.questions : []
+      }
+    ])
+  ),
+  settings: snapshot.settings || { mode: 'finite', rounds: 1 },
+  teams: snapshot.teams || [],
+  turnTeamId: snapshot.turnTeamId || null,
+  board: snapshot.board || null,
+  activeQuestion: snapshot.activeQuestion || null,
+  lastWrongAttempt: snapshot.lastWrongAttempt || null,
+  winnerTeamId: snapshot.winnerTeamId || null
+});
 
 const publicRoom = (room) => {
   const players = [...room.players.values()].sort(byName).map((player) => ({
@@ -32,18 +79,43 @@ const publicRoom = (room) => {
   };
 };
 
-const generateUniqueCode = () => {
+const roomExists = async (code) => {
+  if (rooms.has(code)) return true;
+  return roomRepository.roomExists(code);
+};
+
+const generateUniqueCode = async () => {
   let code = makeCode();
-  while (rooms.has(code)) code = makeCode();
+  while (await roomExists(code)) code = makeCode();
   return code;
 };
 
-const ensureRoom = (code) => {
-  const room = rooms.get(code);
-  if (!room) {
+const loadRoomIntoMemory = async (code) => {
+  const snapshot = await roomRepository.loadRoom(code);
+  if (!snapshot) return null;
+
+  const room = deserializeRoom(snapshot);
+  rooms.set(code, room);
+  return room;
+};
+
+const ensureRoom = async (code) => {
+  const normalizedCode = code.toUpperCase();
+  const cachedRoom = rooms.get(normalizedCode);
+  if (cachedRoom) {
+    return cachedRoom;
+  }
+
+  const persistedRoom = await loadRoomIntoMemory(normalizedCode);
+  if (!persistedRoom) {
     throw new Error('Room not found');
   }
-  return room;
+
+  return persistedRoom;
+};
+
+const persistRoom = async (room) => {
+  await roomRepository.saveRoom(serializeRoom(room));
 };
 
 const getPlayerBySocket = (socketId) => {
@@ -161,8 +233,16 @@ const resetForNewRound = (room, nextCode) => {
 export const gameStore = {
   QUESTION_VALUES,
 
-  createRoom(name, socketId) {
-    const code = generateUniqueCode();
+  persistenceEnabled() {
+    return roomRepository.isEnabled();
+  },
+
+  persistenceConfigError() {
+    return roomRepository.getConfigError();
+  },
+
+  async createRoom(name, socketId) {
+    const code = await generateUniqueCode();
     const playerId = crypto.randomUUID();
     const room = {
       code,
@@ -187,11 +267,12 @@ export const gameStore = {
     });
 
     rooms.set(code, room);
+    await persistRoom(room);
     return { code, playerId, room: publicRoom(room) };
   },
 
-  joinRoom(code, name, socketId) {
-    const room = ensureRoom(code.toUpperCase());
+  async joinRoom(code, name, socketId) {
+    const room = await ensureRoom(code.toUpperCase());
     const playerId = crypto.randomUUID();
 
     room.players.set(playerId, {
@@ -202,19 +283,20 @@ export const gameStore = {
       questions: []
     });
 
+    await persistRoom(room);
     return { code: room.code, playerId, room: publicRoom(room) };
   },
 
-  reconnect(code, playerId, socketId) {
-    const room = ensureRoom(code.toUpperCase());
+  async reconnect(code, playerId, socketId) {
+    const room = await ensureRoom(code.toUpperCase());
     const player = room.players.get(playerId);
     if (!player) throw new Error('Player not found');
     player.socketId = socketId;
     return { code: room.code, room: publicRoom(room) };
   },
 
-  submitQuestions(code, playerId, questions) {
-    const room = ensureRoom(code.toUpperCase());
+  async submitQuestions(code, playerId, questions) {
+    const room = await ensureRoom(code.toUpperCase());
     const player = room.players.get(playerId);
     if (!player) throw new Error('Player not found');
     validateQuestions(questions);
@@ -230,11 +312,12 @@ export const gameStore = {
       room.phase = 'team-setup';
     }
 
+    await persistRoom(room);
     return publicRoom(room);
   },
 
-  setTeamsAndSettings(code, hostPlayerId, payload) {
-    const room = ensureRoom(code.toUpperCase());
+  async setTeamsAndSettings(code, hostPlayerId, payload) {
+    const room = await ensureRoom(code.toUpperCase());
     if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can configure teams');
     if (!Array.isArray(payload.teams) || payload.teams.length < 1) throw new Error('At least one team is required');
 
@@ -272,11 +355,27 @@ export const gameStore = {
     room.winnerTeamId = null;
 
     initializeBoard(room);
+    await persistRoom(room);
     return publicRoom(room);
   },
 
-  selectQuestion(code, hostPlayerId, ownerPlayerId, value) {
-    const room = ensureRoom(code.toUpperCase());
+  async setTeamScore(code, hostPlayerId, teamId, score) {
+    const room = await ensureRoom(code.toUpperCase());
+    if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can edit scores');
+
+    const nextScore = Number(score);
+    if (!Number.isFinite(nextScore)) throw new Error('Score must be a valid number');
+
+    const team = room.teams.find((entry) => entry.id === teamId);
+    if (!team) throw new Error('Team not found');
+
+    team.score = Math.trunc(nextScore);
+    await persistRoom(room);
+    return publicRoom(room);
+  },
+
+  async selectQuestion(code, hostPlayerId, ownerPlayerId, value) {
+    const room = await ensureRoom(code.toUpperCase());
     if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can select questions');
     if (room.phase !== 'playing') throw new Error('Game is not in playing phase');
     if (room.activeQuestion) throw new Error('Another question is active');
@@ -303,11 +402,12 @@ export const gameStore = {
     };
     room.lastWrongAttempt = null;
 
+    await persistRoom(room);
     return publicRoom(room);
   },
 
-  submitAttempt(code, hostPlayerId, answer) {
-    const room = ensureRoom(code.toUpperCase());
+  async submitAttempt(code, hostPlayerId, answer) {
+    const room = await ensureRoom(code.toUpperCase());
     if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can submit attempts');
     if (!room.activeQuestion) throw new Error('No active question');
 
@@ -331,6 +431,7 @@ export const gameStore = {
       const { cell } = findCell(room, active.ownerPlayerId, active.value);
       cell.status = 'closed';
       completeQuestionWithPoints(room, teamId, active.value);
+      await persistRoom(room);
       return {
         room: publicRoom(room),
         result: { isCorrect: true, teamId, teamName: team.name, value: active.value }
@@ -349,12 +450,14 @@ export const gameStore = {
       const { cell } = findCell(room, active.ownerPlayerId, active.value);
       cell.status = 'closed';
       completeQuestionWithoutPoints(room);
+      await persistRoom(room);
       return {
         room: publicRoom(room),
         result: { isCorrect: false, exhausted: true }
       };
     }
 
+    await persistRoom(room);
     return {
       room: publicRoom(room),
       result: {
@@ -367,8 +470,8 @@ export const gameStore = {
     };
   },
 
-  overrideLastIncorrect(code, hostPlayerId) {
-    const room = ensureRoom(code.toUpperCase());
+  async overrideLastIncorrect(code, hostPlayerId) {
+    const room = await ensureRoom(code.toUpperCase());
     if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can override answers');
     if (!room.activeQuestion || !room.lastWrongAttempt) throw new Error('No incorrect attempt to override');
 
@@ -377,31 +480,39 @@ export const gameStore = {
     cell.status = 'closed';
     completeQuestionWithPoints(room, teamId, value);
 
+    await persistRoom(room);
     return publicRoom(room);
   },
 
-  passActiveQuestion(code, hostPlayerId) {
-    const room = ensureRoom(code.toUpperCase());
+  async passActiveQuestion(code, hostPlayerId) {
+    const room = await ensureRoom(code.toUpperCase());
     if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can pass questions');
     if (!room.activeQuestion) throw new Error('No active question');
 
     const { cell } = findCell(room, room.activeQuestion.ownerPlayerId, room.activeQuestion.value);
     cell.status = 'closed';
     completeQuestionWithoutPoints(room);
+
+    await persistRoom(room);
     return publicRoom(room);
   },
 
-  restartGame(code, hostPlayerId) {
-    const room = ensureRoom(code.toUpperCase());
+  async restartGame(code, hostPlayerId) {
+    const room = await ensureRoom(code.toUpperCase());
     if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can restart game');
 
-    const newCode = generateUniqueCode();
-    rooms.delete(room.code);
+    const oldCode = room.code;
+    const newCode = await generateUniqueCode();
+    rooms.delete(oldCode);
     resetForNewRound(room, newCode);
     rooms.set(newCode, room);
 
+    if (roomRepository.isEnabled()) {
+      await roomRepository.renameRoom(oldCode, serializeRoom(room));
+    }
+
     return {
-      oldCode: code,
+      oldCode,
       newCode,
       room: publicRoom(room),
       playerIds: [...room.players.keys()]
@@ -415,8 +526,8 @@ export const gameStore = {
     return { code: located.room.code, room: publicRoom(located.room) };
   },
 
-  getRoom(code) {
-    return publicRoom(ensureRoom(code.toUpperCase()));
+  async getRoom(code) {
+    return publicRoom(await ensureRoom(code.toUpperCase()));
   },
 
   getPlayerContext(socketId) {
