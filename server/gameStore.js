@@ -273,6 +273,7 @@ export const gameStore = {
 
   async joinRoom(code, name, socketId) {
     const room = await ensureRoom(code.toUpperCase());
+    if (room.phase !== 'lobby') throw new Error('Joining is closed after question submission');
     const playerId = crypto.randomUUID();
 
     room.players.set(playerId, {
@@ -297,6 +298,7 @@ export const gameStore = {
 
   async submitQuestions(code, playerId, questions) {
     const room = await ensureRoom(code.toUpperCase());
+    if (room.phase !== 'lobby') throw new Error('Question submission is closed');
     const player = room.players.get(playerId);
     if (!player) throw new Error('Player not found');
     validateQuestions(questions);
@@ -308,10 +310,19 @@ export const gameStore = {
     }));
     player.submitted = true;
 
-    if ([...room.players.values()].every((entry) => entry.submitted)) {
-      room.phase = 'team-setup';
+    await persistRoom(room);
+    return publicRoom(room);
+  },
+
+  async advanceToTeamSetup(code, hostPlayerId) {
+    const room = await ensureRoom(code.toUpperCase());
+    if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can continue to team setup');
+    if (room.phase !== 'lobby') throw new Error('Room is no longer accepting submissions');
+    if (![...room.players.values()].every((entry) => entry.submitted)) {
+      throw new Error('All players must submit before continuing');
     }
 
+    room.phase = 'team-setup';
     await persistRoom(room);
     return publicRoom(room);
   },

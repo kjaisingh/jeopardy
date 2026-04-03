@@ -305,6 +305,18 @@ function App() {
     }
   };
 
+  const continueToTeamSetup = async () => {
+    try {
+      setError('');
+      await call('lobby:continue', {
+        code: room.code,
+        playerId: session.playerId
+      });
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  };
+
   const regenerateTeams = (nextCount) => {
     if (!room) return;
     const count = Math.max(1, Number(nextCount));
@@ -598,7 +610,9 @@ function App() {
               Submit My Questions
             </button>
           ) : (
-            <div className="pill success">Questions submitted. Waiting for others.</div>
+            <div className="pill success">
+              Questions submitted. {isHost ? 'You can still wait for more players to join.' : 'Waiting for the host.'}
+            </div>
           )}
 
           <div className="players-list">
@@ -609,7 +623,15 @@ function App() {
             ))}
           </div>
 
-          {allSubmitted && <div className="pill">All players submitted. Moving to team setup.</div>}
+          {allSubmitted &&
+            (isHost ? (
+              <div className="lobby-ready">
+                <div className="pill">All current players submitted. Continue when everyone who should play has joined.</div>
+                <button onClick={continueToTeamSetup}>Continue to Team Setup</button>
+              </div>
+            ) : (
+              <div className="pill">All current players submitted. Waiting for the host to continue.</div>
+            ))}
         </section>
       )}
 

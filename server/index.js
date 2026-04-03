@@ -86,6 +86,16 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('lobby:continue', async ({ code, playerId }, ack) => {
+    try {
+      const room = await gameStore.advanceToTeamSetup(code, playerId);
+      ack({ ok: true });
+      sendRoom(code.toUpperCase(), room);
+    } catch (error) {
+      ack({ ok: false, message: error.message });
+    }
+  });
+
   socket.on('game:configure', async ({ code, playerId, config }, ack) => {
     try {
       const room = await gameStore.setTeamsAndSettings(code, playerId, config);

@@ -220,6 +220,12 @@ button:disabled {
   color: #b5ffdc;
 }
 
+.lobby-ready {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
 .inline-controls {
   display: flex;
   gap: 10px;
