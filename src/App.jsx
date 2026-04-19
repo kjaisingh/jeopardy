@@ -32,6 +32,9 @@ const call = (event, payload) =>
   });
 
 const teamById = (teams) => Object.fromEntries(teams.map((team) => [team.id, team]));
+const quoteAnswer = (value) => `"${String(value ?? '').trim()}"`;
+const formatAnswerReveal = (submittedAnswer, expectedAnswer) =>
+  `Submitted: ${quoteAnswer(submittedAnswer)} | Expected: ${quoteAnswer(expectedAnswer)}`;
 
 function App() {
   const [session, setSession] = useState(() => {
@@ -396,26 +399,54 @@ function App() {
     try {
       setError('');
       const currentTeamName = teamMap[nextTeamId]?.name || 'That team';
-      if (pendingIncorrect) {
-        enqueueFlash('incorrect', 'INCORRECT!');
-        setPendingIncorrect(null);
-      }
+      const submittedAnswer = activeAnswerInput.trim();
+      const finalizedIncorrectMessage = pendingIncorrect
+        ? `${pendingIncorrect.teamName} was incorrect. ${formatAnswerReveal(
+            pendingIncorrect.submittedAnswer,
+            pendingIncorrect.expectedAnswer
+          )}`
+        : '';
+      if (pendingIncorrect) enqueueFlash('incorrect', 'INCORRECT!');
       const response = await call('question:attempt', {
         code: room.code,
         playerId: session.playerId,
-        answer: activeAnswerInput
+        answer: submittedAnswer
       });
 
       if (response.result.isCorrect) {
         enqueueFlash('correct', 'CORRECT!');
-        setLastResult(`${response.result.teamName} is correct! +${response.result.value}`);
+        setPendingIncorrect(null);
+        setLastResult(
+          [finalizedIncorrectMessage, `${response.result.teamName} is correct! +${response.result.value}. ${formatAnswerReveal(
+            submittedAnswer,
+            activeQuestion.answer
+          )}`]
+            .filter(Boolean)
+            .join(' ')
+        );
       } else if (response.result.exhausted) {
         enqueueFlash('incorrect', 'INCORRECT!');
-        setLastResult('No team answered correctly. Question expired.');
+        setPendingIncorrect(null);
+        setLastResult(
+          [finalizedIncorrectMessage, `No team answered correctly. Question expired. ${formatAnswerReveal(
+            submittedAnswer,
+            activeQuestion.answer
+          )}`]
+            .filter(Boolean)
+            .join(' ')
+        );
       } else {
-        setPendingIncorrect({ teamName: currentTeamName });
+        setPendingIncorrect({
+          teamName: currentTeamName,
+          submittedAnswer,
+          expectedAnswer: activeQuestion.answer
+        });
         const nextTeam = room.teams.find((team) => team.id === response.result.nextTeamId);
-        setLastResult(`Incorrect. Passing to ${nextTeam?.name || 'next team'}.`);
+        setLastResult(
+          [finalizedIncorrectMessage, `Incorrect. Passing to ${nextTeam?.name || 'next team'}.`]
+            .filter(Boolean)
+            .join(' ')
+        );
       }
       setActiveAnswerInput('');
     } catch (requestError) {
@@ -426,10 +457,16 @@ function App() {
   const overrideIncorrect = async () => {
     try {
       setError('');
+      const overrideMessage = pendingIncorrect
+        ? `Override accepted. Points awarded. ${formatAnswerReveal(
+            pendingIncorrect.submittedAnswer,
+            pendingIncorrect.expectedAnswer
+          )}`
+        : 'Override accepted. Points awarded.';
       setPendingIncorrect(null);
       await call('question:override', { code: room.code, playerId: session.playerId });
       enqueueFlash('correct', 'CORRECT!');
-      setLastResult('Override accepted. Points awarded.');
+      setLastResult(overrideMessage);
     } catch (requestError) {
       setError(requestError.message);
     }
@@ -438,12 +475,22 @@ function App() {
   const passQuestion = async () => {
     try {
       setError('');
+      const finalizedIncorrectMessage = pendingIncorrect
+        ? `${pendingIncorrect.teamName} was incorrect. ${formatAnswerReveal(
+            pendingIncorrect.submittedAnswer,
+            pendingIncorrect.expectedAnswer
+          )}`
+        : '';
       if (pendingIncorrect) {
         enqueueFlash('incorrect', 'INCORRECT!');
         setPendingIncorrect(null);
       }
       await call('question:pass', { code: room.code, playerId: session.playerId });
-      setLastResult('Question passed with no points.');
+      setLastResult(
+        [finalizedIncorrectMessage, 'Question passed with no points.']
+          .filter(Boolean)
+          .join(' ')
+      );
     } catch (requestError) {
       setError(requestError.message);
     }
