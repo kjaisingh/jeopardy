@@ -14,18 +14,24 @@ const supabase = persistenceEnabled
     })
   : null;
 
-const throwIfDisabled = () => {
-  if (!persistenceEnabled) {
-    throw new Error('Supabase persistence is not configured');
-  }
-};
+// Persistence is a best-effort durability layer (it lets rooms survive a Render
+// free-tier cold restart). A flaky or misconfigured Supabase project must never
+// block live gameplay, so every call swallows errors and falls back to
+// in-memory-only behavior instead of throwing.
+const safeCall = async (action, fallback, run) => {
+  if (!persistenceEnabled) return fallback;
 
-const unwrap = (result, action) => {
-  if (result.error) {
-    throw new Error(`Failed to ${action}: ${result.error.message}`);
+  try {
+    const result = await run();
+    if (result.error) {
+      console.warn(`Failed to ${action}: ${result.error.message}`);
+      return fallback;
+    }
+    return result.data;
+  } catch (error) {
+    console.warn(`Failed to ${action}: ${error.message}`);
+    return fallback;
   }
-
-  return result.data;
 };
 
 export const roomRepository = {
@@ -39,40 +45,24 @@ export const roomRepository = {
   },
 
   async loadRoom(code) {
-    if (!persistenceEnabled) return null;
-
-    const data = unwrap(
-      await supabase
-        .from('rooms')
-        .select('state')
-        .eq('code', code)
-        .maybeSingle(),
-      `load room ${code}`
+    const data = await safeCall(`load room ${code}`, null, () =>
+      supabase.from('rooms').select('state').eq('code', code).maybeSingle()
     );
 
     return data?.state || null;
   },
 
   async roomExists(code) {
-    if (!persistenceEnabled) return false;
-
-    const data = unwrap(
-      await supabase
-        .from('rooms')
-        .select('code')
-        .eq('code', code)
-        .maybeSingle(),
-      `check room ${code}`
+    const data = await safeCall(`check room ${code}`, null, () =>
+      supabase.from('rooms').select('code').eq('code', code).maybeSingle()
     );
 
     return Boolean(data);
   },
 
   async saveRoom(roomState) {
-    if (!persistenceEnabled) return;
-
-    unwrap(
-      await supabase
+    await safeCall(`save room ${roomState.code}`, null, () =>
+      supabase
         .from('rooms')
         .upsert(
           {
@@ -82,16 +72,13 @@ export const roomRepository = {
           { onConflict: 'code' }
         )
         .select('code')
-        .single(),
-      `save room ${roomState.code}`
+        .single()
     );
   },
 
   async renameRoom(previousCode, roomState) {
-    throwIfDisabled();
-
-    unwrap(
-      await supabase
+    await safeCall(`rename room ${previousCode} to ${roomState.code}`, null, () =>
+      supabase
         .from('rooms')
         .update({
           code: roomState.code,
@@ -99,8 +86,7 @@ export const roomRepository = {
         })
         .eq('code', previousCode)
         .select('code')
-        .single(),
-      `rename room ${previousCode} to ${roomState.code}`
+        .single()
     );
   }
 };

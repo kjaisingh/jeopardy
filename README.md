@@ -81,7 +81,7 @@ This app is designed as a single web service, so every player can open one publi
 - `PORT`: backend port.
 - `CLIENT_URL`: allowed frontend origin for Socket.IO CORS.
 - `VITE_SERVER_URL`: client socket server URL in local development.
-- `SUPABASE_URL`: Supabase project URL for durable room persistence.
-- `SUPABASE_SERVICE_ROLE_KEY`: server-only key used by the Node backend to save and restore room state.
+- `SUPABASE_URL`: Supabase **project** URL (Settings → API → Project URL, e.g. `https://xxxx.supabase.co`) — not the `/rest/v1/` REST endpoint.
+- `SUPABASE_SERVICE_ROLE_KEY`: server-only `service_role` key (Settings → API) used by the Node backend to save and restore room state. Bypasses row-level security by design, so RLS can be left on for the `rooms` table.
 
-If the Supabase variables are omitted, the app still runs, but room persistence falls back to in-memory only and active games will not survive a server restart.
+Room persistence is best-effort: if the Supabase variables are omitted, or Supabase is unreachable/misconfigured, the app still runs on in-memory state only and active games will not survive a server restart. It never blocks gameplay.
