@@ -1,8 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
+import { ResultsScreen } from './ResultsScreen.jsx';
+import { useSound } from './useSound.js';
 
 const QUESTION_VALUES = [100, 200, 300, 400, 500];
 const STORAGE_KEY = 'jeopardy-session';
+const NAME_MAX = 24;
+const PROMPT_MAX = 300;
+const ANSWER_MAX = 120;
+const ATTEMPT_MAX = 200;
+const TIMER_OPTIONS = [0, 10, 15, 20, 30, 45, 60];
 
 const socketUrl =
   import.meta.env.VITE_SERVER_URL ||
@@ -33,85 +40,206 @@ const call = (event, payload) =>
 
 const teamById = (teams) => Object.fromEntries(teams.map((team) => [team.id, team]));
 
+const tailSeq = (events) => (events && events.length ? events[events.length - 1].seq : 0);
+
+const toFlash = (event, teamMap) => {
+  switch (event.type) {
+    case 'attempt-correct':
+    case 'override-correct':
+      return { tone: 'correct', headline: 'CORRECT!', detail: `${event.teamName} +$${event.points}`, holdMs: 1300 };
+    case 'attempt-incorrect':
+      return {
+        tone: 'incorrect',
+        headline: 'INCORRECT',
+        detail: `Passing to ${event.nextTeamName}`,
+        holdMs: 1300
+      };
+    case 'attempt-skipped':
+      return {
+        tone: 'incorrect',
+        headline: "CAN'T ANSWER",
+        detail: `Passing to ${event.nextTeamName}`,
+        holdMs: 1300
+      };
+    case 'question-passed':
+      return {
+        tone: 'incorrect',
+        headline: 'PASSED',
+        detail: `Answer: ${event.correctAnswer}`,
+        holdMs: 1800
+      };
+    case 'question-exhausted':
+      return {
+        tone: 'incorrect',
+        headline: 'NO ONE GOT IT',
+        detail: `Answer: ${event.correctAnswer}`,
+        holdMs: 1800
+      };
+    case 'daily-double': {
+      const teamName = teamMap[event.teamId]?.name || 'A team';
+      return {
+        tone: 'daily-double',
+        headline: 'DAILY DOUBLE!',
+        detail: `${teamName} · $${event.value} → $${event.value * event.multiplier}`,
+        holdMs: 2000
+      };
+    }
+    case 'game-over':
+      return { tone: 'game-over', headline: 'GAME OVER', detail: '', holdMs: 1500 };
+    default:
+      return null;
+  }
+};
+
+const SOUND_BY_TYPE = {
+  'attempt-correct': 'correct',
+  'override-correct': 'correct',
+  'attempt-incorrect': 'incorrect',
+  'attempt-skipped': 'incorrect',
+  'question-passed': 'incorrect',
+  'question-exhausted': 'incorrect',
+  'daily-double': 'dailyDouble',
+  'game-over': 'gameOver'
+};
+
 function App() {
   const [session, setSession] = useState(() => {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
+    try {
+      return JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    } catch {
+      return null;
+    }
   });
   const [room, setRoom] = useState(null);
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [notice, setNotice] = useState('');
   const [suppressAutoResume, setSuppressAutoResume] = useState(false);
+
+  const [busy, setBusy] = useState('');
+  const busyRef = useRef('');
 
   const [createName, setCreateName] = useState('');
   const [joinName, setJoinName] = useState('');
   const [joinCode, setJoinCode] = useState('');
 
   const [drafts, setDrafts] = useState(blankDraft);
-  const [submittingQuestions, setSubmittingQuestions] = useState(false);
+  const [editingQuestions, setEditingQuestions] = useState(false);
+  const [invalidDraftIds, setInvalidDraftIds] = useState(() => new Set());
 
-  const [teamCount, setTeamCount] = useState(2);
+  const [teamCountInput, setTeamCountInput] = useState('2');
   const [teamConfig, setTeamConfig] = useState([]);
   const [roundMode, setRoundMode] = useState('finite');
-  const [roundCount, setRoundCount] = useState(1);
+  const [roundCountInput, setRoundCountInput] = useState('1');
+  const [dailyDoubleEnabled, setDailyDoubleEnabled] = useState(false);
+  const [timerSecondsInput, setTimerSecondsInput] = useState('0');
 
   const [activeAnswerInput, setActiveAnswerInput] = useState('');
-  const [lastResult, setLastResult] = useState('');
-  const [pendingIncorrect, setPendingIncorrect] = useState(null);
-  const [flashQueue, setFlashQueue] = useState([]);
-  const [activeFlash, setActiveFlash] = useState(null);
   const [scoreEditMode, setScoreEditMode] = useState(false);
   const [scoreDrafts, setScoreDrafts] = useState({});
 
-  const me = useMemo(
-    () => room?.players.find((player) => player.id === session?.playerId) || null,
-    [room, session]
-  );
+  const [flash, setFlash] = useState(null);
+  const [flashCursor, setFlashCursor] = useState(null);
+
+  const [deadline, setDeadline] = useState(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  const me = useMemo(() => room?.players.find((player) => player.id === session?.playerId) || null, [room, session]);
   const isHost = Boolean(room && session && room.hostPlayerId === session.playerId);
 
-  const enqueueFlash = (type, text) => {
-    setFlashQueue((current) => [...current, { id: crypto.randomUUID(), type, text }]);
+  const { muted, toggleMuted, play } = useSound(isHost);
+
+  const teamMap = useMemo(() => teamById(room?.teams || []), [room]);
+  const activeQuestion = room?.activeQuestion || null;
+  const questionKey = activeQuestion ? `${activeQuestion.ownerPlayerId}:${activeQuestion.value}` : null;
+  const attemptKey = activeQuestion ? `${questionKey}:${activeQuestion.attemptIndex}` : null;
+  const isDailyDouble = Boolean(activeQuestion && activeQuestion.multiplier > 1);
+
+  const run = async (key, action) => {
+    if (busyRef.current) return;
+    busyRef.current = key;
+    setBusy(key);
+    setError('');
+    try {
+      await action();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      busyRef.current = '';
+      setBusy('');
+    }
   };
 
-  const reconnectSession = async (nextSession, shouldResetOnFailure = false) => {
-    if (!nextSession?.code || !nextSession?.playerId) {
-      return false;
-    }
-
+  const reconnectSession = async (nextSession) => {
+    if (!nextSession?.code || !nextSession?.playerId) return false;
     try {
-      const response = await call('room:reconnect', {
-        code: nextSession.code,
-        playerId: nextSession.playerId
-      });
+      const response = await call('room:reconnect', { code: nextSession.code, playerId: nextSession.playerId });
       setRoom(response.room);
+      setFlashCursor(tailSeq(response.room.events));
+      const rejoinedMe = response.room.players.find((player) => player.id === nextSession.playerId);
+      if (rejoinedMe?.questions) {
+        setDrafts(rejoinedMe.questions.map((question) => ({ localId: crypto.randomUUID(), ...question })));
+      }
       setError('');
       return true;
-    } catch (_requestError) {
-      if (shouldResetOnFailure) {
-        setSession(null);
-        setRoom(null);
-      }
+    } catch (requestError) {
+      setError(`Could not rejoin ${nextSession.code}: ${requestError.message}`);
       return false;
     }
   };
 
+  // Flash drain: promote the next unseen event to a banner, one at a time.
   useEffect(() => {
-    if (activeFlash || !flashQueue.length) return;
+    const events = room?.events || [];
+    if (!events.length) return;
+    const tail = tailSeq(events);
+    if (flashCursor === null || tail < flashCursor) {
+      setFlashCursor(tail);
+      return;
+    }
+    if (flash) return;
+    const next = events.find((event) => event.seq > flashCursor);
+    if (!next) return;
+    setFlashCursor(next.seq);
+    const mapped = toFlash(next, teamMap);
+    if (!mapped) return;
+    const soundName = SOUND_BY_TYPE[next.type];
+    if (soundName) play(soundName);
+    setFlash({
+      id: next.seq,
+      ...mapped,
+      questionKey: next.ownerPlayerId ? `${next.ownerPlayerId}:${next.value}` : null,
+      visible: true
+    });
+  }, [room?.events, flash, flashCursor, teamMap, play]);
 
-    const [nextFlash, ...rest] = flashQueue;
-    setActiveFlash(nextFlash);
-    setFlashQueue(rest);
-  }, [flashQueue, activeFlash]);
+  // Flash lifecycle: hold, then a short exit fade, then gone.
+  useEffect(() => {
+    if (!flash) return undefined;
+    if (flash.visible) {
+      const holdTimeout = window.setTimeout(() => {
+        setFlash((current) => (current?.id === flash.id ? { ...current, visible: false } : current));
+      }, flash.holdMs);
+      return () => window.clearTimeout(holdTimeout);
+    }
+    const exitTimeout = window.setTimeout(() => {
+      setFlash((current) => (current?.id === flash.id ? null : current));
+    }, 200);
+    return () => window.clearTimeout(exitTimeout);
+  }, [flash]);
+
+  // Kill a stale banner the instant a new question opens.
+  useEffect(() => {
+    setFlash((current) => {
+      if (!current?.questionKey || !questionKey) return current;
+      return current.questionKey === questionKey ? current : null;
+    });
+  }, [questionKey]);
 
   useEffect(() => {
-    if (!activeFlash) return undefined;
-
-    const timeout = window.setTimeout(() => {
-      setActiveFlash(null);
-    }, 1300);
-
+    if (!notice) return undefined;
+    const timeout = window.setTimeout(() => setNotice(''), 2500);
     return () => window.clearTimeout(timeout);
-  }, [activeFlash]);
+  }, [notice]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
@@ -122,205 +250,176 @@ function App() {
       setRoom(nextRoom);
       setError('');
     };
-
-    const onError = (payload) => {
-      setError(payload?.message || 'Unexpected error');
-    };
-
     const onConnect = () => {
-      if (suppressAutoResume) return;
-      reconnectSession(session, true);
+      if (!suppressAutoResume && session) reconnectSession(session);
     };
-
     socket.on('room:updated', onRoom);
-    socket.on('room:error', onError);
     socket.on('connect', onConnect);
-
-    if (socket.connected) {
-      onConnect();
-    }
-
+    if (socket.connected) onConnect();
     return () => {
       socket.off('room:updated', onRoom);
-      socket.off('room:error', onError);
       socket.off('connect', onConnect);
     };
-  }, [session, suppressAutoResume]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Keep a saved session's code in sync after a restart hands out a new one.
+  useEffect(() => {
+    if (!room?.code || !session?.code) return;
+    if (room.code !== session.code) {
+      setSession((current) => (current ? { ...current, code: room.code } : current));
+    }
+  }, [room?.code, session?.code]);
+
+  const teamCount = room?.players?.length
+    ? Math.min(Math.max(Math.floor(Number(teamCountInput)) || 1, 1), room.players.length)
+    : Math.max(Math.floor(Number(teamCountInput)) || 1, 1);
 
   useEffect(() => {
-    if (room?.phase !== 'team-setup' || !isHost) return;
-
-    setTeamConfig((current) => {
-      const roomIds = new Set(room.players.map((player) => player.id));
-      const configuredIds = new Set(current.flatMap((team) => team.playerIds));
-      const coversRoomExactly =
-        current.length > 0 &&
-        roomIds.size === configuredIds.size &&
-        [...roomIds].every((id) => configuredIds.has(id)) &&
-        [...configuredIds].every((id) => roomIds.has(id));
-
-      if (coversRoomExactly) return current;
-
-      const playerIds = room.players.map((player) => player.id);
-      const teamCountSafe = Math.max(1, teamCount);
-      const teams = Array.from({ length: teamCountSafe }, (_, index) => ({
-        id: crypto.randomUUID(),
-        name: `Team ${index + 1}`,
-        playerIds: []
-      }));
-
-      playerIds.forEach((playerId, index) => {
-        teams[index % teamCountSafe].playerIds.push(playerId);
-      });
-      return teams;
+    if (!room || room.phase !== 'team-setup' || !isHost) return;
+    const currentIds = new Set(room.players.map((player) => player.id));
+    const configuredIds = new Set(teamConfig.flatMap((team) => team.playerIds));
+    const coversRoomExactly =
+      currentIds.size === configuredIds.size && [...currentIds].every((id) => configuredIds.has(id));
+    if (coversRoomExactly) return;
+    const teams = Array.from({ length: teamCount }, (_, index) => ({
+      id: crypto.randomUUID(),
+      name: `Team ${index + 1}`,
+      playerIds: []
+    }));
+    room.players.forEach((player, index) => {
+      teams[index % teamCount].playerIds.push(player.id);
     });
+    setTeamConfig(teams);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [room, isHost, teamCount]);
 
   useEffect(() => {
-    const nextDrafts = Object.fromEntries((room?.teams || []).map((team) => [team.id, String(team.score)]));
-    setScoreDrafts(nextDrafts);
-  }, [room?.teams]);
+    setScoreDrafts(Object.fromEntries((room?.teams || []).map((team) => [team.id, String(team.score)])));
+  }, [room]);
+
+  useEffect(() => {
+    if (!isHost || !activeQuestion || !room?.settings?.timerSeconds) {
+      setDeadline(null);
+      return;
+    }
+    setDeadline(Date.now() + room.settings.timerSeconds * 1000);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attemptKey, isHost, room?.settings?.timerSeconds]);
+
+  useEffect(() => {
+    if (!deadline) return undefined;
+    const interval = window.setInterval(() => setNow(Date.now()), 100);
+    return () => window.clearInterval(interval);
+  }, [deadline]);
+
+  useEffect(() => {
+    if (!deadline || !activeQuestion) return;
+    if (now >= deadline) {
+      setDeadline(null);
+      play('timeUp');
+      skipTeam();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [now, deadline, activeQuestion]);
 
   const resetToHome = () => {
-    setSuppressAutoResume(true);
     setRoom(null);
     setError('');
-    setCreateName('');
-    setJoinName('');
-    setJoinCode('');
+    setNotice('');
     setDrafts(blankDraft());
-    setLastResult('');
-    setActiveAnswerInput('');
-    setPendingIncorrect(null);
-    setFlashQueue([]);
-    setActiveFlash(null);
-    setScoreEditMode(false);
-    setScoreDrafts({});
+    setEditingQuestions(false);
+    setInvalidDraftIds(new Set());
+    setTeamCountInput('2');
     setTeamConfig([]);
-    setTeamCount(2);
     setRoundMode('finite');
-    setRoundCount(1);
+    setRoundCountInput('1');
+    setDailyDoubleEnabled(false);
+    setTimerSecondsInput('0');
+    setActiveAnswerInput('');
+    setScoreEditMode(false);
+    setFlash(null);
+    setFlashCursor(null);
+    setSuppressAutoResume(true);
   };
 
   const leaveCompletely = () => {
+    resetToHome();
     setSuppressAutoResume(false);
     setSession(null);
-    setRoom(null);
-    setError('');
-    setCreateName('');
-    setJoinName('');
-    setJoinCode('');
-    setDrafts(blankDraft());
-    setLastResult('');
-    setActiveAnswerInput('');
-    setPendingIncorrect(null);
-    setFlashQueue([]);
-    setActiveFlash(null);
-    setScoreEditMode(false);
-    setScoreDrafts({});
-    setTeamConfig([]);
-    setTeamCount(2);
-    setRoundMode('finite');
-    setRoundCount(1);
   };
 
-  const createRoom = async () => {
-    try {
-      setError('');
-      setLoading(true);
-      setSuppressAutoResume(false);
-      const response = await call('room:create', { name: createName.trim() });
-      setSession({ code: response.code, playerId: response.playerId });
-      setRoom(response.room);
-    } catch (requestError) {
-      setError(requestError.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const createRoom = () => run('create', async () => {
+    setSuppressAutoResume(false);
+    const response = await call('room:create', { name: createName.trim() });
+    setSession({ code: response.code, playerId: response.playerId });
+    setRoom(response.room);
+    setFlashCursor(tailSeq(response.room.events));
+  });
 
-  const joinRoom = async () => {
-    try {
-      setError('');
-      setLoading(true);
-      setSuppressAutoResume(false);
-      const response = await call('room:join', { code: joinCode.trim().toUpperCase(), name: joinName.trim() });
-      setSession({ code: response.code, playerId: response.playerId });
-      setRoom(response.room);
-    } catch (requestError) {
-      setError(requestError.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const joinRoom = () => run('join', async () => {
+    setSuppressAutoResume(false);
+    const response = await call('room:join', { code: joinCode.trim().toUpperCase(), name: joinName.trim() });
+    setSession({ code: response.code, playerId: response.playerId });
+    setRoom(response.room);
+    setFlashCursor(tailSeq(response.room.events));
+  });
 
   const updateDraft = (localId, key, value) => {
     setDrafts((current) => current.map((entry) => (entry.localId === localId ? { ...entry, [key]: value } : entry)));
+    setInvalidDraftIds((current) => {
+      if (!current.has(localId)) return current;
+      const next = new Set(current);
+      next.delete(localId);
+      return next;
+    });
   };
 
-  const resumePreviousGame = async () => {
-    try {
-      setError('');
-      setLoading(true);
-      const resumed = await reconnectSession(session, true);
-      if (resumed) {
-        setSuppressAutoResume(false);
-      } else {
-        setSuppressAutoResume(false);
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
+  const resumePreviousGame = () => run('resume', async () => {
+    await reconnectSession(session);
+    setSuppressAutoResume(false);
+  });
 
   const updateDraftValue = (localId, value) => {
     setDrafts((current) => {
-      const target = current.find((entry) => entry.localId === localId);
-      const existing = current.find((entry) => entry.value === Number(value));
-      if (!target || !existing || existing.localId === localId) {
-        return current.map((entry) => (entry.localId === localId ? { ...entry, value: Number(value) } : entry));
-      }
-
+      const numeric = Number(value);
+      const collision = current.find((entry) => entry.localId !== localId && entry.value === numeric);
       return current.map((entry) => {
-        if (entry.localId === localId) return { ...entry, value: Number(value) };
-        if (entry.localId === existing.localId) return { ...entry, value: target.value };
+        if (entry.localId === localId) return { ...entry, value: numeric };
+        if (collision && entry.localId === collision.localId) return { ...entry, value: current.find((e) => e.localId === localId).value };
         return entry;
       });
     });
   };
 
-  const submitQuestions = async () => {
-    try {
-      setError('');
-      setSubmittingQuestions(true);
-      await call('questions:submit', {
-        code: room.code,
-        playerId: session.playerId,
-        questions: drafts
-      });
-    } catch (requestError) {
-      setError(requestError.message);
-    } finally {
-      setSubmittingQuestions(false);
+  const submitQuestions = () => run('submit-questions', async () => {
+    const invalidIds = new Set(
+      drafts
+        .filter(
+          (draft) =>
+            !draft.prompt.trim() ||
+            draft.prompt.length > PROMPT_MAX ||
+            !draft.answer.trim() ||
+            draft.answer.length > ANSWER_MAX
+        )
+        .map((draft) => draft.localId)
+    );
+    if (invalidIds.size) {
+      setInvalidDraftIds(invalidIds);
+      throw new Error('Fill out every question and answer before submitting.');
     }
-  };
+    setInvalidDraftIds(new Set());
+    await call('questions:submit', { code: room.code, playerId: session.playerId, questions: drafts });
+    setEditingQuestions(false);
+  });
 
-  const continueToTeamSetup = async () => {
-    try {
-      setError('');
-      await call('lobby:continue', {
-        code: room.code,
-        playerId: session.playerId
-      });
-    } catch (requestError) {
-      setError(requestError.message);
-    }
-  };
+  const continueToTeamSetup = () =>
+    run('continue', () => call('lobby:continue', { code: room.code, playerId: session.playerId }));
 
-  const regenerateTeams = (nextCount) => {
+  const regenerateTeams = (nextCountInput) => {
+    setTeamCountInput(nextCountInput);
     if (!room) return;
-    const count = Math.max(1, Number(nextCount));
-    setTeamCount(count);
+    const count = Math.min(Math.max(Math.floor(Number(nextCountInput)) || 1, 1), room.players.length);
     const teams = Array.from({ length: count }, (_, index) => ({
       id: crypto.randomUUID(),
       name: `Team ${index + 1}`,
@@ -333,429 +432,485 @@ function App() {
   };
 
   const movePlayerTeam = (playerId, teamId) => {
-    setTeamConfig((current) => {
-      const stripped = current.map((team) => ({
+    setTeamConfig((current) =>
+      current.map((team) => ({
         ...team,
-        playerIds: team.playerIds.filter((id) => id !== playerId)
-      }));
-      return stripped.map((team) =>
-        team.id === teamId ? { ...team, playerIds: [...team.playerIds, playerId] } : team
-      );
-    });
+        playerIds:
+          team.id === teamId
+            ? [...team.playerIds.filter((id) => id !== playerId), playerId]
+            : team.playerIds.filter((id) => id !== playerId)
+      }))
+    );
   };
 
-  const startGame = async () => {
-    try {
-      setError('');
-      await call('game:configure', {
+  const emptyTeam = teamConfig.find((team) => team.playerIds.length === 0);
+  const blankNameTeam = teamConfig.find((team) => !team.name.trim());
+  const startGameBlocker = emptyTeam
+    ? `"${emptyTeam.name || 'Unnamed team'}" has no players.`
+    : blankNameTeam
+    ? 'Every team needs a name.'
+    : null;
+  const duplicateTeamNames = (() => {
+    const seen = new Set();
+    const dupes = new Set();
+    teamConfig.forEach((team) => {
+      const key = team.name.trim().toLowerCase();
+      if (key && seen.has(key)) dupes.add(team.name.trim());
+      seen.add(key);
+    });
+    return [...dupes];
+  })();
+
+  const startGame = () =>
+    run('start-game', () =>
+      call('game:configure', {
         code: room.code,
         playerId: session.playerId,
         config: {
           teams: teamConfig.map((team) => ({ name: team.name, playerIds: team.playerIds })),
           mode: roundMode,
-          rounds: roundMode === 'finite' ? Number(roundCount) : null
+          rounds: roundMode === 'finite' ? Number(roundCountInput) : null,
+          dailyDouble: dailyDoubleEnabled,
+          timerSeconds: Number(timerSecondsInput)
         }
-      });
-    } catch (requestError) {
-      setError(requestError.message);
-    }
-  };
+      })
+    );
 
   const updateScoreDraft = (teamId, value) => {
     setScoreDrafts((current) => ({ ...current, [teamId]: value }));
   };
 
-  const saveTeamScore = async (teamId) => {
-    try {
-      setError('');
-      await call('team:score:set', {
-        code: room.code,
-        playerId: session.playerId,
-        teamId,
-        score: Number(scoreDrafts[teamId] ?? 0)
-      });
-      setLastResult('Score updated.');
-    } catch (requestError) {
-      setError(requestError.message);
-    }
-  };
+  const saveTeamScore = (teamId) =>
+    run('score', async () => {
+      const raw = (scoreDrafts[teamId] ?? '').trim();
+      if (!/^-?\d{1,7}$/.test(raw)) throw new Error('Score must be a whole number.');
+      await call('team:score:set', { code: room.code, playerId: session.playerId, teamId, score: Number(raw) });
+      setNotice('Score updated.');
+    });
 
-  const selectQuestion = async (ownerPlayerId, value) => {
-    try {
-      setError('');
-      setLastResult('');
+  const selectQuestion = (ownerPlayerId, value) =>
+    run('select', async () => {
       setActiveAnswerInput('');
-      setPendingIncorrect(null);
       await call('question:select', { code: room.code, playerId: session.playerId, ownerPlayerId, value });
-    } catch (requestError) {
-      setError(requestError.message);
-    }
-  };
+      play('select');
+    });
 
-  const submitAttempt = async () => {
-    try {
-      setError('');
-      const currentTeamName = teamMap[nextTeamId]?.name || 'That team';
-      if (pendingIncorrect) {
-        enqueueFlash('incorrect', 'INCORRECT!');
-        setPendingIncorrect(null);
-      }
-      const response = await call('question:attempt', {
-        code: room.code,
-        playerId: session.playerId,
-        answer: activeAnswerInput
-      });
-
-      if (response.result.isCorrect) {
-        enqueueFlash('correct', 'CORRECT!');
-        setLastResult(`${response.result.teamName} is correct! +${response.result.value}`);
-      } else if (response.result.exhausted) {
-        enqueueFlash('incorrect', 'INCORRECT!');
-        setLastResult('No team answered correctly. Question expired.');
-      } else {
-        setPendingIncorrect({ teamName: currentTeamName });
-        const nextTeam = room.teams.find((team) => team.id === response.result.nextTeamId);
-        setLastResult(`Incorrect. Passing to ${nextTeam?.name || 'next team'}.`);
-      }
+  const submitAttempt = () =>
+    run('attempt', async () => {
+      const answer = activeAnswerInput;
       setActiveAnswerInput('');
-    } catch (requestError) {
-      setError(requestError.message);
-    }
-  };
+      await call('question:attempt', { code: room.code, playerId: session.playerId, answer });
+    });
 
-  const overrideIncorrect = async () => {
-    try {
-      setError('');
-      setPendingIncorrect(null);
-      await call('question:override', { code: room.code, playerId: session.playerId });
-      enqueueFlash('correct', 'CORRECT!');
-      setLastResult('Override accepted. Points awarded.');
-    } catch (requestError) {
-      setError(requestError.message);
-    }
-  };
+  const skipTeam = () =>
+    run('skip', () => call('question:skip', { code: room.code, playerId: session.playerId }));
 
-  const passQuestion = async () => {
-    try {
-      setError('');
-      if (pendingIncorrect) {
-        enqueueFlash('incorrect', 'INCORRECT!');
-        setPendingIncorrect(null);
-      }
-      await call('question:pass', { code: room.code, playerId: session.playerId });
-      setLastResult('Question passed with no points.');
-    } catch (requestError) {
-      setError(requestError.message);
-    }
-  };
+  const overrideIncorrect = () =>
+    run('override', () => call('question:override', { code: room.code, playerId: session.playerId }));
 
-  const restartGame = async () => {
-    try {
-      setError('');
+  const passQuestion = () =>
+    run('pass', () => call('question:pass', { code: room.code, playerId: session.playerId }));
+
+  const restartGame = () =>
+    run('restart', async () => {
       setDrafts(blankDraft());
-      const response = await call('game:restart', { code: room.code, playerId: session.playerId });
-      setSession((current) => ({ ...current, code: response.newCode }));
-      setLastResult('Game restarted with a new room code.');
-    } catch (requestError) {
-      setError(requestError.message);
+      setEditingQuestions(false);
+      setInvalidDraftIds(new Set());
+      await call('game:restart', { code: room.code, playerId: session.playerId });
+    });
+
+  const copyRoomCode = async () => {
+    if (!navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(room.code);
+      setNotice('Room code copied.');
+    } catch {
+      setError('Could not copy the room code.');
     }
   };
 
-  const teamMap = useMemo(() => teamById(room?.teams || []), [room]);
-  const activeQuestion = room?.activeQuestion;
-  const nextTeamId = activeQuestion
-    ? room.settings.mode === 'infinite'
-      ? activeQuestion.attemptOrder[activeQuestion.attemptIndex % activeQuestion.attemptOrder.length]
-      : activeQuestion.attemptOrder[activeQuestion.attemptIndex]
-    : null;
+  const canResume = Boolean(session?.code && session?.playerId && !room);
 
   if (!room || !session) {
-    const createReady = createName.trim().length > 1;
-    const joinReady = joinName.trim().length > 1;
-    const canResume = Boolean(session?.code && session?.playerId);
-
     return (
-      <div className="app home-screen">
-        <div className="card home-card">
-          <h1>Jeopardy</h1>
-          <p className="subtitle">Create a room, share the code, and play on one host screen.</p>
-
-          <label>Name</label>
-          <input value={createName} onChange={(event) => setCreateName(event.target.value)} placeholder="Your name" />
-
-          <div className="actions">
-            <button disabled={!createReady || loading} onClick={createRoom}>
-              Create Game
+      <div className="app">
+        <div className="home-screen">
+          <div className="card home-card">
+            <h1>Jeopardy</h1>
+            <h2>Create a Game</h2>
+            <input
+              value={createName}
+              maxLength={NAME_MAX}
+              placeholder="Your name"
+              onChange={(event) => setCreateName(event.target.value)}
+            />
+            <button type="button" disabled={!createName.trim() || Boolean(busy)} onClick={createRoom}>
+              {busy === 'create' ? 'Creating…' : 'Create Game'}
             </button>
           </div>
 
-          <div className="join-divider">or join existing game</div>
-
-          <label>Room code</label>
-          <input
-            value={joinCode}
-            onChange={(event) => setJoinCode(event.target.value.toUpperCase())}
-            placeholder="ABC123"
-            maxLength={6}
-          />
-          <label>Name</label>
-          <input value={joinName} onChange={(event) => setJoinName(event.target.value)} placeholder="Your name" />
-          <button className="secondary" disabled={!joinReady || joinCode.length < 6 || loading} onClick={joinRoom}>
-            Join Game
-          </button>
+          <div className="card home-card">
+            <h2>Join a Game</h2>
+            <input
+              value={joinCode}
+              maxLength={8}
+              placeholder="Room code"
+              onChange={(event) => setJoinCode(event.target.value)}
+            />
+            <input
+              value={joinName}
+              maxLength={NAME_MAX}
+              placeholder="Your name"
+              onChange={(event) => setJoinName(event.target.value)}
+            />
+            <button
+              type="button"
+              disabled={!joinCode.trim() || !joinName.trim() || Boolean(busy)}
+              onClick={joinRoom}
+            >
+              {busy === 'join' ? 'Joining…' : 'Join Game'}
+            </button>
+          </div>
 
           {canResume && (
-            <>
-              <div className="join-divider">or resume previous game</div>
-              <button className="secondary" disabled={loading} onClick={resumePreviousGame}>
-                Resume Previous Game ({session.code})
+            <div className="card home-card">
+              <h2>Resume</h2>
+              <p>Room {session.code}</p>
+              <button type="button" disabled={Boolean(busy)} onClick={resumePreviousGame}>
+                Resume Previous Game
               </button>
-              <button className="secondary subtle" disabled={loading} onClick={leaveCompletely}>
+              <button type="button" className="subtle" disabled={Boolean(busy)} onClick={leaveCompletely}>
                 Forget Saved Session
               </button>
-            </>
+            </div>
           )}
-
-          {error && <div className="error">{error}</div>}
         </div>
+        {error && <div className="error sticky">{error}</div>}
       </div>
     );
   }
 
-  const allSubmitted = room.players.every((player) => player.submitted);
+  const hostPlayer = room.players.find((player) => player.id === room.hostPlayerId);
+  const hostName = hostPlayer?.name || 'the host';
+
+  const flashFragment = flash && (
+    <div className={`result-flash ${flash.tone}${flash.visible ? '' : ' leaving'}`}>
+      <div className="result-flash-text">
+        <div className="result-flash-headline">{flash.headline}</div>
+        {flash.detail && <div className="result-flash-detail">{flash.detail}</div>}
+      </div>
+    </div>
+  );
+
+  if (room.phase === 'finished') {
+    return (
+      <div className="app">
+        <ResultsScreen
+          room={room}
+          isHost={isHost}
+          hostName={hostName}
+          busy={Boolean(busy)}
+          scoreEditMode={scoreEditMode}
+          scoreDrafts={scoreDrafts}
+          onToggleScoreEdit={() => setScoreEditMode((current) => !current)}
+          onScoreDraftChange={updateScoreDraft}
+          onSaveScore={saveTeamScore}
+          onRestart={restartGame}
+          onLeave={leaveCompletely}
+        />
+        {notice && <div className="pill notice">{notice}</div>}
+        {flashFragment}
+        {error && <div className="error sticky">{error}</div>}
+      </div>
+    );
+  }
+
+  const allSubmitted = room.players.length > 0 && room.players.every((player) => player.submitted);
   const currentTeam = room.turnTeamId ? teamMap[room.turnTeamId] : null;
-  const winnerTeam = room.winnerTeamId ? teamMap[room.winnerTeamId] : null;
-  const renderScoreCard = (team, emphasizeTurn = false) => (
-    <div key={team.id} className={`score-card ${emphasizeTurn && room.turnTeamId === team.id ? 'active' : ''}`}>
-      <div>{team.name}</div>
-      {isHost && scoreEditMode ? (
+
+  const renderScoreCard = (team, emphasizeTurn) => (
+    <div key={team.id} className={`score-card${emphasizeTurn && team.id === room.turnTeamId ? ' active' : ''}`}>
+      <div className="label">{team.name}</div>
+      {scoreEditMode && isHost ? (
         <div className="score-editor">
           <input
-            type="number"
-            value={scoreDrafts[team.id] ?? String(team.score)}
+            type="text"
+            inputMode="numeric"
+            value={scoreDrafts[team.id] ?? ''}
+            maxLength={8}
             onChange={(event) => updateScoreDraft(team.id, event.target.value)}
           />
-          <button className="secondary" onClick={() => saveTeamScore(team.id)}>
+          <button type="button" className="subtle" disabled={Boolean(busy)} onClick={() => saveTeamScore(team.id)}>
             Save
           </button>
         </div>
       ) : (
-        <strong>{team.score}</strong>
+        <div className="score-value">${team.score}</div>
       )}
     </div>
   );
+
+  const timerTotalMs = (room.settings?.timerSeconds || 0) * 1000;
+  const timerRemainingMs = deadline ? Math.max(0, deadline - now) : 0;
+  const timerPct = timerTotalMs ? (timerRemainingMs / timerTotalMs) * 100 : 0;
+  const timerSecondsLeft = Math.ceil(timerRemainingMs / 1000);
 
   return (
     <div className="app">
       <header className="topbar card">
         <div>
           <div className="label">Room code</div>
-          <div className="room-code">{room.code}</div>
+          <div className="room-code-row">
+            <div className="room-code code-block">{room.code}</div>
+            {typeof navigator !== 'undefined' && navigator.clipboard && (
+              <button type="button" className="subtle" onClick={copyRoomCode}>
+                Copy
+              </button>
+            )}
+          </div>
         </div>
         <div>
           <div className="label">You</div>
-          <div className="player-name">
+          <div>
             {me?.name} {isHost ? '(Host)' : ''}
           </div>
         </div>
         <div className="topbar-actions">
-          <button className="secondary" onClick={resetToHome}>
+          {isHost && (
+            <button type="button" className="secondary subtle" onClick={toggleMuted}>
+              {muted ? 'Unmute' : 'Mute'}
+            </button>
+          )}
+          <button type="button" className="secondary" onClick={resetToHome}>
             Go Home
           </button>
-          <button className="secondary subtle" onClick={leaveCompletely}>
+          <button type="button" className="secondary danger subtle" onClick={leaveCompletely}>
             Leave Completely
           </button>
         </div>
       </header>
 
+      {notice && <div className="pill notice">{notice}</div>}
+
       {room.phase === 'lobby' && (
         <section className="card">
           <h2>Question Submission</h2>
-          <p className="subtitle">
-            Enter your 5 question/answer pairs and assign each one a unique value from 100 to 500.
-          </p>
+          <p>Each player writes 5 questions, one per point value.</p>
 
-          <div className="question-grid">
-            {drafts.map((draft) => (
-              <div key={draft.localId} className="question-card">
-                <div className="question-head">
-                  <label>Value</label>
-                  <select value={draft.value} onChange={(event) => updateDraftValue(draft.localId, event.target.value)}>
-                    {QUESTION_VALUES.map((value) => (
-                      <option key={value} value={value}>
-                        {value}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <label>Question</label>
-                <textarea
-                  rows={3}
-                  value={draft.prompt}
-                  onChange={(event) => updateDraft(draft.localId, 'prompt', event.target.value)}
-                  placeholder="Write the clue/question"
-                />
-                <label>Answer</label>
-                <input
-                  value={draft.answer}
-                  onChange={(event) => updateDraft(draft.localId, 'answer', event.target.value)}
-                  placeholder="Expected answer"
-                />
+          {!me?.submitted || editingQuestions ? (
+            <>
+              <div className="question-grid">
+                {drafts.map((draft) => (
+                  <div key={draft.localId} className={`question-card${invalidDraftIds.has(draft.localId) ? ' invalid' : ''}`}>
+                    <div className="question-head">
+                      <label>Value</label>
+                      <select value={draft.value} onChange={(event) => updateDraftValue(draft.localId, event.target.value)}>
+                        {QUESTION_VALUES.map((value) => (
+                          <option key={value} value={value}>
+                            ${value}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <label>Question</label>
+                    <textarea
+                      rows={3}
+                      maxLength={PROMPT_MAX}
+                      value={draft.prompt}
+                      placeholder="Write the clue/question"
+                      onChange={(event) => updateDraft(draft.localId, 'prompt', event.target.value)}
+                    />
+                    {draft.prompt.length >= PROMPT_MAX * 0.8 && (
+                      <div className={`char-count${draft.prompt.length >= PROMPT_MAX ? ' danger' : ''}`}>
+                        {draft.prompt.length}/{PROMPT_MAX}
+                      </div>
+                    )}
+                    <label>Answer</label>
+                    <input
+                      maxLength={ANSWER_MAX}
+                      value={draft.answer}
+                      placeholder="Expected answer"
+                      onChange={(event) => updateDraft(draft.localId, 'answer', event.target.value)}
+                    />
+                    {draft.answer.length >= ANSWER_MAX * 0.8 && (
+                      <div className={`char-count${draft.answer.length >= ANSWER_MAX ? ' danger' : ''}`}>
+                        {draft.answer.length}/{ANSWER_MAX}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-
-          {!me?.submitted ? (
-            <button onClick={submitQuestions} disabled={submittingQuestions}>
-              Submit My Questions
-            </button>
+              <button type="button" disabled={Boolean(busy)} onClick={submitQuestions}>
+                {busy === 'submit-questions' ? 'Submitting…' : 'Submit My Questions'}
+              </button>
+            </>
           ) : (
-            <div className="pill success">
-              Questions submitted. {isHost ? 'You can still wait for more players to join.' : 'Waiting for the host.'}
+            <div className="lobby-ready">
+              <div className="pill success">
+                Questions submitted. {isHost ? 'Waiting for everyone else.' : 'Waiting for the host.'}
+              </div>
+              <button type="button" className="secondary subtle" onClick={() => setEditingQuestions(true)}>
+                Edit My Questions
+              </button>
             </div>
           )}
 
           <div className="players-list">
             {room.players.map((player) => (
-              <div key={player.id} className={`pill ${player.submitted ? 'success' : ''}`}>
+              <div key={player.id} className={`pill ${player.submitted ? 'success' : ''}${!player.isConnected ? ' offline' : ''}`}>
                 {player.name} - {player.submitted ? 'Ready' : 'Editing'}
+                {!player.isConnected ? ' (offline)' : ''}
               </div>
             ))}
           </div>
 
-          {allSubmitted &&
-            (isHost ? (
-              <div className="lobby-ready">
-                <div className="pill">All current players submitted. Continue when everyone who should play has joined.</div>
-                <button onClick={continueToTeamSetup}>Continue to Team Setup</button>
-              </div>
-            ) : (
-              <div className="pill">All current players submitted. Waiting for the host to continue.</div>
-            ))}
-        </section>
-      )}
-
-      {room.phase === 'team-setup' && (
-        <section className="card">
-          <h2>Team Setup</h2>
-          {!isHost ? (
-            <p className="subtitle">Waiting for the host to assign teams and start the game.</p>
-          ) : (
-            <>
-              <div className="inline-controls">
-                <div className="control-field">
-                  <label>Number of teams</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={teamCount}
-                    onChange={(event) => regenerateTeams(event.target.value)}
-                  />
-                </div>
-
-                <div className="control-field">
-                  <label>Round mode</label>
-                  <select value={roundMode} onChange={(event) => setRoundMode(event.target.value)}>
-                    <option value="finite">Finite</option>
-                    <option value="infinite">Infinite</option>
-                  </select>
-                </div>
-
-                {roundMode === 'finite' && (
-                  <div className="control-field">
-                    <label>Rounds per other team</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={roundCount}
-                      onChange={(event) => setRoundCount(Number(event.target.value))}
-                    />
-                  </div>
-                )}
-              </div>
-
-              <div className="team-layout">
-                <div className="player-pool">
-                  <h3>Assign players</h3>
-                  {room.players.map((player) => {
-                    const assignedTeam = teamConfig.find((team) => team.playerIds.includes(player.id));
-                    return (
-                      <div className="player-row" key={player.id}>
-                        <span>{player.name}</span>
-                        <select
-                          value={assignedTeam?.id || ''}
-                          onChange={(event) => movePlayerTeam(player.id, event.target.value)}
-                        >
-                          {teamConfig.map((team) => (
-                            <option key={team.id} value={team.id}>
-                              {team.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                <div className="teams-preview">
-                  <h3>Team list</h3>
-                  {teamConfig.map((team) => (
-                    <div key={team.id} className="team-card">
-                      <input
-                        value={team.name}
-                        onChange={(event) =>
-                          setTeamConfig((current) =>
-                            current.map((entry) =>
-                              entry.id === team.id ? { ...entry, name: event.target.value } : entry
-                            )
-                          )
-                        }
-                      />
-                      <div className="team-members">
-                        {team.playerIds
-                          .map((playerId) => room.players.find((player) => player.id === playerId)?.name)
-                          .filter(Boolean)
-                          .join(', ') || 'No players'}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <button onClick={startGame}>Start Game</button>
-            </>
+          {isHost && (
+            <button type="button" disabled={!allSubmitted || Boolean(busy)} onClick={continueToTeamSetup}>
+              {busy === 'continue' ? 'Continuing…' : 'Continue to Team Setup'}
+            </button>
           )}
         </section>
       )}
 
-      {(room.phase === 'playing' || room.phase === 'finished') && (
-        <section className="card board-shell">
-          <div className="board-top">
-            <div>
-              <h2>Game Board</h2>
-              <div className="subtitle">Turn to choose: {currentTeam?.name || '-'}</div>
+      {room.phase === 'team-setup' && (
+        <section className="card team-layout">
+          <h2>Team Setup</h2>
+
+          <div className="inline-controls">
+            <div className="control-field">
+              <label>Number of teams</label>
+              <input
+                type="number"
+                min="1"
+                max={room.players.length}
+                value={teamCountInput}
+                onChange={(event) => regenerateTeams(event.target.value)}
+              />
             </div>
-            <div className="board-side">
-              {isHost && (
-                <div className="score-actions">
-                  <button className="secondary" onClick={() => setScoreEditMode((current) => !current)}>
-                    {scoreEditMode ? 'Done Editing Scores' : 'Edit Scores'}
-                  </button>
-                </div>
-              )}
-              <div className="score-row">{room.teams.map((team) => renderScoreCard(team, true))}</div>
+
+            <div className="control-field">
+              <label>Round mode</label>
+              <select value={roundMode} onChange={(event) => setRoundMode(event.target.value)}>
+                <option value="finite">Finite</option>
+                <option value="infinite">Infinite</option>
+              </select>
+            </div>
+
+            {roundMode === 'finite' && (
+              <div className="control-field">
+                <label>Rounds per team</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={roundCountInput}
+                  onChange={(event) => setRoundCountInput(event.target.value)}
+                />
+              </div>
+            )}
+
+            <div className="control-field">
+              <label>Answer timer</label>
+              <select value={timerSecondsInput} onChange={(event) => setTimerSecondsInput(event.target.value)}>
+                {TIMER_OPTIONS.map((seconds) => (
+                  <option key={seconds} value={seconds}>
+                    {seconds === 0 ? 'Off' : `${seconds}s`}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="control-field checkbox-field">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={dailyDoubleEnabled}
+                  onChange={(event) => setDailyDoubleEnabled(event.target.checked)}
+                />
+                Enable Daily Double
+              </label>
             </div>
           </div>
 
-          <div className="board-grid" style={{ gridTemplateColumns: `repeat(${room.board.columns.length}, minmax(0, 1fr))` }}>
+          <div className="player-pool">
+            <h3>Players</h3>
+            {room.players.map((player) => {
+              const assignedTeam = teamConfig.find((team) => team.playerIds.includes(player.id));
+              return (
+                <div className="player-row" key={player.id}>
+                  <span>
+                    {player.name}
+                    {!player.isConnected ? ' (offline)' : ''}
+                  </span>
+                  <select value={assignedTeam?.id || ''} onChange={(event) => movePlayerTeam(player.id, event.target.value)}>
+                    {teamConfig.map((team) => (
+                      <option key={team.id} value={team.id}>
+                        {team.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="teams-preview">
+            {teamConfig.map((team) => (
+              <div className="team-card" key={team.id}>
+                <input
+                  value={team.name}
+                  maxLength={NAME_MAX}
+                  onChange={(event) => {
+                    const nextName = event.target.value;
+                    setTeamConfig((current) =>
+                      current.map((entry) => (entry.id === team.id ? { ...entry, name: nextName } : entry))
+                    );
+                  }}
+                />
+                <div>{team.playerIds.length} player(s)</div>
+              </div>
+            ))}
+          </div>
+
+          {startGameBlocker && <div className="field-error">{startGameBlocker}</div>}
+          {duplicateTeamNames.length > 0 && (
+            <div className="field-error warn">Duplicate team names: {duplicateTeamNames.join(', ')}</div>
+          )}
+
+          {isHost && (
+            <button type="button" disabled={Boolean(busy) || Boolean(startGameBlocker)} onClick={startGame}>
+              {busy === 'start-game' ? 'Starting…' : 'Start Game'}
+            </button>
+          )}
+        </section>
+      )}
+
+      {room.phase === 'playing' && (
+        <section className="card">
+          <div className="board-top">
+            <h2>Board</h2>
+            <div>{currentTeam ? `${currentTeam.name}'s turn to pick` : ''}</div>
+            {isHost && (
+              <button type="button" className="subtle" onClick={() => setScoreEditMode((current) => !current)}>
+                {scoreEditMode ? 'Done Editing Scores' : 'Edit Scores'}
+              </button>
+            )}
+          </div>
+
+          <div className="score-row">{room.teams.map((team) => renderScoreCard(team, true))}</div>
+
+          <div className="board-grid">
             {room.board.columns.map((column) => (
               <div key={column.playerId} className="board-column">
                 <div className="board-header">{column.playerName}</div>
                 {column.cells.map((cell) => (
                   <button
+                    type="button"
                     key={`${column.playerId}-${cell.value}`}
-                    className={`board-cell ${cell.status}`}
-                    disabled={!isHost || room.phase !== 'playing' || cell.status !== 'open' || Boolean(activeQuestion)}
+                    className={`board-cell ${cell.status}${
+                      cell.multiplier > 1 && cell.status !== 'open' ? ' daily-double-cell' : ''
+                    }`}
+                    disabled={!isHost || room.phase !== 'playing' || cell.status !== 'open' || Boolean(activeQuestion) || Boolean(busy)}
                     onClick={() => selectQuestion(column.playerId, cell.value)}
                   >
                     {cell.status === 'open' ? `$${cell.value}` : ''}
@@ -764,64 +919,74 @@ function App() {
               </div>
             ))}
           </div>
-
-          {lastResult && <div className="pill">{lastResult}</div>}
-
-          {room.phase === 'finished' && (
-            <div className="card nested">
-              <h3>Game Complete</h3>
-              <p className="subtitle">
-                Winner: <strong>{winnerTeam?.name || 'Tie'}</strong>
-              </p>
-              <div className="score-row">{room.teams.map((team) => renderScoreCard(team, false))}</div>
-              {isHost && <button onClick={restartGame}>Restart with New Code</button>}
-            </div>
-          )}
         </section>
       )}
 
       {activeQuestion && room.phase === 'playing' && (
-        <section className="question-overlay">
-          <div className="question-overlay-card">
+        <div className="question-overlay">
+          <div className={`question-overlay-card${isDailyDouble ? ' daily-double' : ''}`}>
+            {isDailyDouble && <div className="pill daily-double-pill">DAILY DOUBLE ×{activeQuestion.multiplier}</div>}
             <div className="active-meta">
               <span>
-                {activeQuestion.ownerPlayerName} - ${activeQuestion.value}
+                {activeQuestion.ownerPlayerName} -{' '}
+                {isDailyDouble
+                  ? `$${activeQuestion.value} → $${activeQuestion.value * activeQuestion.multiplier}`
+                  : `$${activeQuestion.value}`}
               </span>
-              <span>Answering team: {teamMap[nextTeamId]?.name || '-'}</span>
+              <span>Answering team: {teamMap[activeQuestion.currentTeamId]?.name || '-'}</span>
             </div>
 
             <h2 className="question-prompt">{activeQuestion.prompt}</h2>
 
             {isHost && (
               <>
-                <input
-                  value={activeAnswerInput}
-                  onChange={(event) => setActiveAnswerInput(event.target.value)}
-                  placeholder="Type team answer"
-                />
-                <div className="actions">
-                  <button onClick={submitAttempt}>Submit Attempt</button>
-                  {room.lastWrongAttempt && (
-                    <button className="secondary" onClick={overrideIncorrect}>
-                      Override Last Incorrect
+                {room.settings.timerSeconds > 0 && deadline && (
+                  <div className="timer-block">
+                    <div className={`timer-track${timerPct < 20 ? ' danger' : timerPct < 50 ? ' warn' : ''}`}>
+                      <div className="timer-bar" style={{ width: `${timerPct}%` }} />
+                    </div>
+                    <div className="timer-count">{timerSecondsLeft}s</div>
+                  </div>
+                )}
+
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    if (!activeAnswerInput.trim() || busy) return;
+                    submitAttempt();
+                  }}
+                >
+                  <input
+                    value={activeAnswerInput}
+                    maxLength={ATTEMPT_MAX}
+                    placeholder="Type team answer"
+                    autoFocus
+                    onChange={(event) => setActiveAnswerInput(event.target.value)}
+                  />
+                  <div className="actions">
+                    <button type="submit" disabled={!activeAnswerInput.trim() || Boolean(busy)}>
+                      {busy === 'attempt' ? 'Submitting…' : 'Submit Attempt'}
                     </button>
-                  )}
-                  <button className="secondary" onClick={passQuestion}>
-                    Pass Question
-                  </button>
-                </div>
+                    <button type="button" className="secondary" disabled={Boolean(busy)} onClick={skipTeam}>
+                      Can't Answer
+                    </button>
+                    {room.lastWrongAttempt && (
+                      <button type="button" className="secondary" disabled={Boolean(busy)} onClick={overrideIncorrect}>
+                        Override Last Incorrect
+                      </button>
+                    )}
+                    <button type="button" className="secondary" disabled={Boolean(busy)} onClick={passQuestion}>
+                      Pass Question
+                    </button>
+                  </div>
+                </form>
               </>
             )}
           </div>
-        </section>
-      )}
-
-      {activeFlash && (
-        <div className={`result-flash ${activeFlash.type}`}>
-          <div className="result-flash-text">{activeFlash.text}</div>
         </div>
       )}
 
+      {flashFragment}
       {error && <div className="error sticky">{error}</div>}
     </div>
   );

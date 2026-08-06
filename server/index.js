@@ -34,21 +34,18 @@ const io = new Server(httpServer, {
   }
 });
 
-const sendRoom = (code, room) => {
-  io.to(code).emit('room:updated', room);
-};
-
-const emitError = (socket, error) => {
-  socket.emit('room:error', { message: error.message || 'Unexpected error' });
+const sendRoom = (code) => {
+  for (const { socketId, room } of gameStore.roomViews(code)) {
+    io.to(socketId).emit('room:updated', room);
+  }
 };
 
 io.on('connection', (socket) => {
   socket.on('room:create', async ({ name }, ack) => {
     try {
       const result = await gameStore.createRoom(name, socket.id);
-      socket.join(result.code);
       ack({ ok: true, code: result.code, playerId: result.playerId, room: result.room });
-      sendRoom(result.code, result.room);
+      sendRoom(result.code);
     } catch (error) {
       ack({ ok: false, message: error.message });
     }
@@ -57,9 +54,8 @@ io.on('connection', (socket) => {
   socket.on('room:join', async ({ code, name }, ack) => {
     try {
       const result = await gameStore.joinRoom(code, name, socket.id);
-      socket.join(result.code);
       ack({ ok: true, code: result.code, playerId: result.playerId, room: result.room });
-      sendRoom(result.code, result.room);
+      sendRoom(result.code);
     } catch (error) {
       ack({ ok: false, message: error.message });
     }
@@ -68,9 +64,8 @@ io.on('connection', (socket) => {
   socket.on('room:reconnect', async ({ code, playerId }, ack) => {
     try {
       const result = await gameStore.reconnect(code, playerId, socket.id);
-      socket.join(result.code);
       ack({ ok: true, room: result.room });
-      sendRoom(result.code, result.room);
+      sendRoom(result.code);
     } catch (error) {
       ack({ ok: false, message: error.message });
     }
@@ -80,7 +75,7 @@ io.on('connection', (socket) => {
     try {
       const room = await gameStore.submitQuestions(code, playerId, questions);
       ack({ ok: true });
-      sendRoom(code.toUpperCase(), room);
+      sendRoom(room.code);
     } catch (error) {
       ack({ ok: false, message: error.message });
     }
@@ -90,7 +85,7 @@ io.on('connection', (socket) => {
     try {
       const room = await gameStore.advanceToTeamSetup(code, playerId);
       ack({ ok: true });
-      sendRoom(code.toUpperCase(), room);
+      sendRoom(room.code);
     } catch (error) {
       ack({ ok: false, message: error.message });
     }
@@ -100,7 +95,7 @@ io.on('connection', (socket) => {
     try {
       const room = await gameStore.setTeamsAndSettings(code, playerId, config);
       ack({ ok: true });
-      sendRoom(code.toUpperCase(), room);
+      sendRoom(room.code);
     } catch (error) {
       ack({ ok: false, message: error.message });
     }
@@ -110,7 +105,7 @@ io.on('connection', (socket) => {
     try {
       const room = await gameStore.setTeamScore(code, playerId, teamId, score);
       ack({ ok: true });
-      sendRoom(code.toUpperCase(), room);
+      sendRoom(room.code);
     } catch (error) {
       ack({ ok: false, message: error.message });
     }
@@ -120,7 +115,7 @@ io.on('connection', (socket) => {
     try {
       const room = await gameStore.selectQuestion(code, playerId, ownerPlayerId, value);
       ack({ ok: true });
-      sendRoom(code.toUpperCase(), room);
+      sendRoom(room.code);
     } catch (error) {
       ack({ ok: false, message: error.message });
     }
@@ -130,7 +125,17 @@ io.on('connection', (socket) => {
     try {
       const { room, result } = await gameStore.submitAttempt(code, playerId, answer);
       ack({ ok: true, result });
-      sendRoom(code.toUpperCase(), room);
+      sendRoom(room.code);
+    } catch (error) {
+      ack({ ok: false, message: error.message });
+    }
+  });
+
+  socket.on('question:skip', async ({ code, playerId }, ack) => {
+    try {
+      const { room, result } = await gameStore.skipCurrentTeam(code, playerId);
+      ack({ ok: true, result });
+      sendRoom(room.code);
     } catch (error) {
       ack({ ok: false, message: error.message });
     }
@@ -138,9 +143,9 @@ io.on('connection', (socket) => {
 
   socket.on('question:override', async ({ code, playerId }, ack) => {
     try {
-      const room = await gameStore.overrideLastIncorrect(code, playerId);
-      ack({ ok: true });
-      sendRoom(code.toUpperCase(), room);
+      const { room, result } = await gameStore.overrideLastIncorrect(code, playerId);
+      ack({ ok: true, result });
+      sendRoom(room.code);
     } catch (error) {
       ack({ ok: false, message: error.message });
     }
@@ -148,9 +153,9 @@ io.on('connection', (socket) => {
 
   socket.on('question:pass', async ({ code, playerId }, ack) => {
     try {
-      const room = await gameStore.passActiveQuestion(code, playerId);
-      ack({ ok: true });
-      sendRoom(code.toUpperCase(), room);
+      const { room, result } = await gameStore.passActiveQuestion(code, playerId);
+      ack({ ok: true, result });
+      sendRoom(room.code);
     } catch (error) {
       ack({ ok: false, message: error.message });
     }
@@ -159,30 +164,16 @@ io.on('connection', (socket) => {
   socket.on('game:restart', async ({ code, playerId }, ack) => {
     try {
       const restarted = await gameStore.restartGame(code, playerId);
-      const sockets = await io.in(code.toUpperCase()).fetchSockets();
-      await Promise.all(sockets.map((entry) => entry.leave(code.toUpperCase())));
-      await Promise.all(sockets.map((entry) => entry.join(restarted.newCode)));
-
       ack({ ok: true, newCode: restarted.newCode });
-      sendRoom(restarted.newCode, restarted.room);
+      sendRoom(restarted.newCode);
     } catch (error) {
-      ack({ ok: false, message: error.message });
-    }
-  });
-
-  socket.on('room:state', (_payload, ack) => {
-    try {
-      const context = gameStore.getPlayerContext(socket.id);
-      ack({ ok: true, context });
-    } catch (error) {
-      emitError(socket, error);
       ack({ ok: false, message: error.message });
     }
   });
 
   socket.on('disconnect', () => {
     const result = gameStore.disconnect(socket.id);
-    if (result) sendRoom(result.code, result.room);
+    if (result) sendRoom(result.code);
   });
 });
 
