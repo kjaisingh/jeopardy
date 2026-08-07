@@ -117,6 +117,10 @@ function App() {
 
   const [busy, setBusy] = useState('');
   const busyRef = useRef('');
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const suppressAutoResumeRef = useRef(suppressAutoResume);
+  suppressAutoResumeRef.current = suppressAutoResume;
 
   const [createName, setCreateName] = useState('');
   const [joinName, setJoinName] = useState('');
@@ -251,7 +255,7 @@ function App() {
       setError('');
     };
     const onConnect = () => {
-      if (!suppressAutoResume && session) reconnectSession(session);
+      if (!suppressAutoResumeRef.current && sessionRef.current) reconnectSession(sessionRef.current);
     };
     socket.on('room:updated', onRoom);
     socket.on('connect', onConnect);
