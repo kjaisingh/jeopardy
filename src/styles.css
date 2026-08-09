@@ -246,6 +246,25 @@ button:disabled {
   margin-top: 0;
 }
 
+.settings-summary {
+  color: #a9b3e6;
+  font-size: 0.9rem;
+}
+
+.settings-editor {
+  margin: 10px 0;
+  display: grid;
+  gap: 10px;
+}
+
+.qr-code {
+  width: 180px;
+  height: 180px;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+}
+
 .team-layout {
   display: grid;
   grid-template-columns: 0.85fr 1.15fr;
@@ -467,6 +486,7 @@ button:disabled {
   border-radius: 22px;
   border: 3px solid transparent;
   box-shadow: 0 28px 70px rgba(0, 0, 0, 0.5);
+  animation: flash-in 0.18s ease-out;
 }
 
 .result-flash.correct .result-flash-text {
@@ -481,10 +501,6 @@ button:disabled {
   background: linear-gradient(180deg, #e3414f, #b82735);
   border-color: #ff9aa2;
   text-shadow: 0 0 18px rgba(255, 255, 255, 0.2);
-}
-
-.result-flash-text {
-  animation: flash-in 0.18s ease-out;
 }
 
 .result-flash.leaving .result-flash-text {

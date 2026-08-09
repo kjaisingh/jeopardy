@@ -5,18 +5,19 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
-    "dev:server": "nodemon server/index.js",
+    "dev:server": "nodemon --exec \"node --env-file=.env\" server/index.js",
     "dev:client": "vite",
     "build": "vite build",
     "start": "node server/index.js",
     "preview": "vite preview",
-    "test": "node --test server/server.test.js"
+    "test": "HOST_GRACE_MS=50 node --test server/server.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.101.1",
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "nanoid": "^5.1.5",
+    "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "socket.io": "^4.8.1",
@@ -29,6 +30,6 @@
     "vite": "^5.4.14"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20.6.0"
   }
 }

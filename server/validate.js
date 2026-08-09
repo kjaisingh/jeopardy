@@ -6,7 +6,8 @@ export const LIMITS = {
   players: { max: 10 },
   rounds: { min: 1, max: 10 },
   timerSeconds: { min: 0, max: 300 },
-  score: { min: -1000000, max: 1000000 }
+  score: { min: -1000000, max: 1000000 },
+  questionsPerPlayer: { min: 1, max: 10 }
 };
 
 export const requiredText = (value, label, { min = 1, max = Infinity } = {}) => {

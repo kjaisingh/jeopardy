@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
+import QRCode from 'qrcode';
 import { ResultsScreen } from './ResultsScreen.jsx';
 import { useSound } from './useSound.js';
 
-const QUESTION_VALUES = [100, 200, 300, 400, 500];
+const valuesForCount = (count) => Array.from({ length: count }, (_, i) => (i + 1) * 100);
 const STORAGE_KEY = 'jeopardy-session';
 const NAME_MAX = 24;
 const PROMPT_MAX = 300;
@@ -19,13 +20,35 @@ const socket = io(socketUrl, {
   autoConnect: true
 });
 
-const blankDraft = () =>
-  QUESTION_VALUES.map((value) => ({
+const blankDraft = (count) =>
+  valuesForCount(count).map((value) => ({
     localId: crypto.randomUUID(),
     value,
     prompt: '',
     answer: ''
   }));
+
+const reconcileDrafts = (current, targetCount) => {
+  const next = [...current];
+  if (next.length > targetCount) {
+    for (let i = 0; i < next.length && next.length > targetCount; ) {
+      if (!next[i].prompt.trim() && !next[i].answer.trim()) {
+        next.splice(i, 1);
+      } else {
+        i += 1;
+      }
+    }
+    while (next.length > targetCount) next.pop();
+    return next;
+  }
+  if (next.length < targetCount) {
+    const startPosition = next.length;
+    for (let i = startPosition; i < targetCount; i += 1) {
+      next.push({ localId: crypto.randomUUID(), value: (i + 1) * 100, prompt: '', answer: '' });
+    }
+  }
+  return next;
+};
 
 const call = (event, payload) =>
   new Promise((resolve, reject) => {
@@ -86,6 +109,15 @@ const toFlash = (event, teamMap) => {
     }
     case 'game-over':
       return { tone: 'game-over', headline: 'GAME OVER', detail: '', holdMs: 1500 };
+    case 'host-changed':
+      return { tone: 'correct', headline: 'NEW HOST', detail: `${event.newHostName} is now the host`, holdMs: 1800 };
+    case 'settings-changed':
+      return {
+        tone: 'incorrect',
+        headline: 'SETTINGS CHANGED',
+        detail: 'Review and resubmit your questions',
+        holdMs: 2000
+      };
     default:
       return null;
   }
@@ -99,7 +131,9 @@ const SOUND_BY_TYPE = {
   'question-passed': 'incorrect',
   'question-exhausted': 'incorrect',
   'daily-double': 'dailyDouble',
-  'game-over': 'gameOver'
+  'game-over': 'gameOver',
+  'host-changed': 'select',
+  'settings-changed': 'incorrect'
 };
 
 function App() {
@@ -113,7 +147,9 @@ function App() {
   const [room, setRoom] = useState(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [suppressAutoResume, setSuppressAutoResume] = useState(false);
+  const [suppressAutoResume, setSuppressAutoResume] = useState(() =>
+    new URLSearchParams(window.location.search).has('join')
+  );
 
   const [busy, setBusy] = useState('');
   const busyRef = useRef('');
@@ -124,18 +160,25 @@ function App() {
 
   const [createName, setCreateName] = useState('');
   const [joinName, setJoinName] = useState('');
-  const [joinCode, setJoinCode] = useState('');
+  const [joinCode, setJoinCode] = useState(
+    () => new URLSearchParams(window.location.search).get('join')?.toUpperCase() || ''
+  );
 
-  const [drafts, setDrafts] = useState(blankDraft);
+  const [drafts, setDrafts] = useState(() => []);
   const [editingQuestions, setEditingQuestions] = useState(false);
   const [invalidDraftIds, setInvalidDraftIds] = useState(() => new Set());
+  const prevQuestionsPerPlayerRef = useRef(null);
 
+  const [questionsPerPlayerInput, setQuestionsPerPlayerInput] = useState('5');
   const [teamCountInput, setTeamCountInput] = useState('2');
   const [teamConfig, setTeamConfig] = useState([]);
   const [roundMode, setRoundMode] = useState('finite');
   const [roundCountInput, setRoundCountInput] = useState('1');
   const [dailyDoubleEnabled, setDailyDoubleEnabled] = useState(false);
   const [timerSecondsInput, setTimerSecondsInput] = useState('0');
+
+  const [settingsEditMode, setSettingsEditMode] = useState(false);
+  const [settingsDraft, setSettingsDraft] = useState(null);
 
   const [activeAnswerInput, setActiveAnswerInput] = useState('');
   const [scoreEditMode, setScoreEditMode] = useState(false);
@@ -147,8 +190,15 @@ function App() {
   const [deadline, setDeadline] = useState(null);
   const [now, setNow] = useState(() => Date.now());
 
+  const [superseded, setSuperseded] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState('');
+
   const me = useMemo(() => room?.players.find((player) => player.id === session?.playerId) || null, [room, session]);
   const isHost = Boolean(room && session && room.hostPlayerId === session.playerId);
+  const hostPlayer = useMemo(
+    () => room?.players.find((player) => player.id === room.hostPlayerId) || null,
+    [room]
+  );
 
   const { muted, toggleMuted, play } = useSound(isHost);
 
@@ -257,14 +307,26 @@ function App() {
     const onConnect = () => {
       if (!suppressAutoResumeRef.current && sessionRef.current) reconnectSession(sessionRef.current);
     };
+    const onSuperseded = () => setSuperseded(true);
     socket.on('room:updated', onRoom);
     socket.on('connect', onConnect);
+    socket.on('session:superseded', onSuperseded);
     if (socket.connected) onConnect();
     return () => {
       socket.off('room:updated', onRoom);
       socket.off('connect', onConnect);
+      socket.off('session:superseded', onSuperseded);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Strip a ?join= deep-link param once it has been used to prefill the join form.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has('join')) return;
+    params.delete('join');
+    const query = params.toString();
+    window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
   }, []);
 
   // Keep a saved session's code in sync after a restart hands out a new one.
@@ -327,11 +389,35 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [now, deadline, activeQuestion]);
 
+  useEffect(() => {
+    const count = room?.settings?.questionsPerPlayer;
+    if (!count) return;
+    if (prevQuestionsPerPlayerRef.current === null) {
+      prevQuestionsPerPlayerRef.current = count;
+      setDrafts((current) => (current.length ? current : blankDraft(count)));
+      return;
+    }
+    if (prevQuestionsPerPlayerRef.current === count) return;
+    prevQuestionsPerPlayerRef.current = count;
+    setDrafts((current) => reconcileDrafts(current, count));
+  }, [room?.settings?.questionsPerPlayer]);
+
+  useEffect(() => {
+    if (!isHost || room?.phase !== 'lobby') {
+      setQrDataUrl('');
+      return;
+    }
+    QRCode.toDataURL(`${window.location.origin}/?join=${room.code}`)
+      .then(setQrDataUrl)
+      .catch(() => setQrDataUrl(''));
+  }, [isHost, room?.phase, room?.code]);
+
   const resetToHome = () => {
     setRoom(null);
     setError('');
     setNotice('');
-    setDrafts(blankDraft());
+    setDrafts([]);
+    prevQuestionsPerPlayerRef.current = null;
     setEditingQuestions(false);
     setInvalidDraftIds(new Set());
     setTeamCountInput('2');
@@ -340,10 +426,15 @@ function App() {
     setRoundCountInput('1');
     setDailyDoubleEnabled(false);
     setTimerSecondsInput('0');
+    setQuestionsPerPlayerInput('5');
+    setSettingsEditMode(false);
+    setSettingsDraft(null);
     setActiveAnswerInput('');
     setScoreEditMode(false);
     setFlash(null);
     setFlashCursor(null);
+    setSuperseded(false);
+    setQrDataUrl('');
     setSuppressAutoResume(true);
   };
 
@@ -355,7 +446,16 @@ function App() {
 
   const createRoom = () => run('create', async () => {
     setSuppressAutoResume(false);
-    const response = await call('room:create', { name: createName.trim() });
+    const response = await call('room:create', {
+      name: createName.trim(),
+      settings: {
+        mode: roundMode,
+        rounds: roundMode === 'finite' ? Number(roundCountInput) : null,
+        dailyDouble: dailyDoubleEnabled,
+        timerSeconds: Number(timerSecondsInput),
+        questionsPerPlayer: Number(questionsPerPlayerInput)
+      }
+    });
     setSession({ code: response.code, playerId: response.playerId });
     setRoom(response.room);
     setFlashCursor(tailSeq(response.room.events));
@@ -385,15 +485,8 @@ function App() {
   });
 
   const updateDraftValue = (localId, value) => {
-    setDrafts((current) => {
-      const numeric = Number(value);
-      const collision = current.find((entry) => entry.localId !== localId && entry.value === numeric);
-      return current.map((entry) => {
-        if (entry.localId === localId) return { ...entry, value: numeric };
-        if (collision && entry.localId === collision.localId) return { ...entry, value: current.find((e) => e.localId === localId).value };
-        return entry;
-      });
-    });
+    const numeric = Number(value);
+    setDrafts((current) => current.map((entry) => (entry.localId === localId ? { ...entry, value: numeric } : entry)));
   };
 
   const submitQuestions = () => run('submit-questions', async () => {
@@ -412,6 +505,11 @@ function App() {
       setInvalidDraftIds(invalidIds);
       throw new Error('Fill out every question and answer before submitting.');
     }
+    const required = valuesForCount(room.settings.questionsPerPlayer);
+    const missing = required.filter((value) => !drafts.some((draft) => draft.value === value));
+    if (missing.length) {
+      throw new Error(`Missing a ${missing.map((value) => `$${value}`).join(' and a ')} question.`);
+    }
     setInvalidDraftIds(new Set());
     await call('questions:submit', { code: room.code, playerId: session.playerId, questions: drafts });
     setEditingQuestions(false);
@@ -419,6 +517,35 @@ function App() {
 
   const continueToTeamSetup = () =>
     run('continue', () => call('lobby:continue', { code: room.code, playerId: session.playerId }));
+
+  const toggleSettingsEdit = () => {
+    if (!settingsEditMode) {
+      setSettingsDraft({
+        mode: room.settings.mode,
+        rounds: room.settings.rounds ?? 1,
+        dailyDouble: room.settings.dailyDouble,
+        timerSeconds: room.settings.timerSeconds,
+        questionsPerPlayer: room.settings.questionsPerPlayer
+      });
+    }
+    setSettingsEditMode((current) => !current);
+  };
+
+  const saveSettings = () =>
+    run('save-settings', async () => {
+      await call('game:settings', {
+        code: room.code,
+        playerId: session.playerId,
+        settings: {
+          mode: settingsDraft.mode,
+          rounds: settingsDraft.mode === 'finite' ? Number(settingsDraft.rounds) : null,
+          dailyDouble: settingsDraft.dailyDouble,
+          timerSeconds: Number(settingsDraft.timerSeconds),
+          questionsPerPlayer: Number(settingsDraft.questionsPerPlayer)
+        }
+      });
+      setSettingsEditMode(false);
+    });
 
   const regenerateTeams = (nextCountInput) => {
     setTeamCountInput(nextCountInput);
@@ -471,11 +598,7 @@ function App() {
         code: room.code,
         playerId: session.playerId,
         config: {
-          teams: teamConfig.map((team) => ({ name: team.name, playerIds: team.playerIds })),
-          mode: roundMode,
-          rounds: roundMode === 'finite' ? Number(roundCountInput) : null,
-          dailyDouble: dailyDoubleEnabled,
-          timerSeconds: Number(timerSecondsInput)
+          teams: teamConfig.map((team) => ({ name: team.name, playerIds: team.playerIds }))
         }
       })
     );
@@ -517,7 +640,7 @@ function App() {
 
   const restartGame = () =>
     run('restart', async () => {
-      setDrafts(blankDraft());
+      setDrafts(blankDraft(room.settings.questionsPerPlayer));
       setEditingQuestions(false);
       setInvalidDraftIds(new Set());
       await call('game:restart', { code: room.code, playerId: session.playerId });
@@ -533,7 +656,41 @@ function App() {
     }
   };
 
+  const copyShareLink = async () => {
+    if (!navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}/?join=${room.code}`);
+      setNotice('Invite link copied.');
+    } catch {
+      setError('Could not copy the invite link.');
+    }
+  };
+
+  const useHere = () => run('use-here', async () => {
+    setSuperseded(false);
+    await reconnectSession(session);
+  });
+
   const canResume = Boolean(session?.code && session?.playerId && !room);
+
+  if (superseded) {
+    return (
+      <div className="app">
+        <div className="home-screen">
+          <div className="card home-card">
+            <h1>Jeopardy</h1>
+            <p>This game is now open on another device.</p>
+            <button type="button" disabled={Boolean(busy)} onClick={useHere}>
+              {busy === 'use-here' ? 'Reclaiming…' : 'Use Here'}
+            </button>
+            <button type="button" className="subtle" onClick={leaveCompletely}>
+              Leave Game
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!room || !session) {
     return (
@@ -548,6 +705,63 @@ function App() {
               placeholder="Your name"
               onChange={(event) => setCreateName(event.target.value)}
             />
+
+            <div className="inline-controls">
+              <div className="control-field">
+                <label>Questions per player</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={questionsPerPlayerInput}
+                  onChange={(event) => setQuestionsPerPlayerInput(event.target.value)}
+                />
+              </div>
+
+              <div className="control-field">
+                <label>Round mode</label>
+                <select value={roundMode} onChange={(event) => setRoundMode(event.target.value)}>
+                  <option value="finite">Finite</option>
+                  <option value="infinite">Infinite</option>
+                </select>
+              </div>
+
+              {roundMode === 'finite' && (
+                <div className="control-field">
+                  <label>Rounds per team</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="10"
+                    value={roundCountInput}
+                    onChange={(event) => setRoundCountInput(event.target.value)}
+                  />
+                </div>
+              )}
+
+              <div className="control-field">
+                <label>Answer timer</label>
+                <select value={timerSecondsInput} onChange={(event) => setTimerSecondsInput(event.target.value)}>
+                  {TIMER_OPTIONS.map((seconds) => (
+                    <option key={seconds} value={seconds}>
+                      {seconds === 0 ? 'Off' : `${seconds}s`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="control-field checkbox-field">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={dailyDoubleEnabled}
+                    onChange={(event) => setDailyDoubleEnabled(event.target.checked)}
+                  />
+                  Enable Daily Double
+                </label>
+              </div>
+            </div>
+
             <button type="button" disabled={!createName.trim() || Boolean(busy)} onClick={createRoom}>
               {busy === 'create' ? 'Creating…' : 'Create Game'}
             </button>
@@ -594,7 +808,6 @@ function App() {
     );
   }
 
-  const hostPlayer = room.players.find((player) => player.id === room.hostPlayerId);
   const hostName = hostPlayer?.name || 'the host';
 
   const flashFragment = flash && (
@@ -667,11 +880,19 @@ function App() {
           <div className="room-code-row">
             <div className="room-code code-block">{room.code}</div>
             {typeof navigator !== 'undefined' && navigator.clipboard && (
-              <button type="button" className="subtle" onClick={copyRoomCode}>
-                Copy
-              </button>
+              <>
+                <button type="button" className="subtle" onClick={copyRoomCode}>
+                  Copy
+                </button>
+                <button type="button" className="subtle" onClick={copyShareLink}>
+                  Copy Link
+                </button>
+              </>
             )}
           </div>
+          {!hostPlayer?.isConnected && (
+            <div className="pill offline">Host disconnected — promoting a new host shortly</div>
+          )}
         </div>
         <div>
           <div className="label">You</div>
@@ -696,10 +917,104 @@ function App() {
 
       {notice && <div className="pill notice">{notice}</div>}
 
+      {room.phase === 'lobby' && isHost && qrDataUrl && (
+        <section className="card">
+          <h2>Invite Players</h2>
+          <p>Scan to join, or use Copy Link above.</p>
+          <img src={qrDataUrl} alt="QR code to join game" className="qr-code" />
+        </section>
+      )}
+
       {room.phase === 'lobby' && (
         <section className="card">
           <h2>Question Submission</h2>
-          <p>Each player writes 5 questions, one per point value.</p>
+          <p>Each player writes {room.settings.questionsPerPlayer} questions, one per point value.</p>
+
+          {isHost && (
+            <div className="settings-editor">
+              {settingsEditMode ? (
+                <>
+                  <div className="inline-controls">
+                    <div className="control-field">
+                      <label>Questions per player</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="10"
+                        value={settingsDraft.questionsPerPlayer}
+                        onChange={(event) =>
+                          setSettingsDraft((current) => ({ ...current, questionsPerPlayer: event.target.value }))
+                        }
+                      />
+                    </div>
+
+                    <div className="control-field">
+                      <label>Round mode</label>
+                      <select
+                        value={settingsDraft.mode}
+                        onChange={(event) => setSettingsDraft((current) => ({ ...current, mode: event.target.value }))}
+                      >
+                        <option value="finite">Finite</option>
+                        <option value="infinite">Infinite</option>
+                      </select>
+                    </div>
+
+                    {settingsDraft.mode === 'finite' && (
+                      <div className="control-field">
+                        <label>Rounds per team</label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="10"
+                          value={settingsDraft.rounds}
+                          onChange={(event) => setSettingsDraft((current) => ({ ...current, rounds: event.target.value }))}
+                        />
+                      </div>
+                    )}
+
+                    <div className="control-field">
+                      <label>Answer timer</label>
+                      <select
+                        value={settingsDraft.timerSeconds}
+                        onChange={(event) =>
+                          setSettingsDraft((current) => ({ ...current, timerSeconds: event.target.value }))
+                        }
+                      >
+                        {TIMER_OPTIONS.map((seconds) => (
+                          <option key={seconds} value={seconds}>
+                            {seconds === 0 ? 'Off' : `${seconds}s`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="control-field checkbox-field">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={settingsDraft.dailyDouble}
+                          onChange={(event) =>
+                            setSettingsDraft((current) => ({ ...current, dailyDouble: event.target.checked }))
+                          }
+                        />
+                        Enable Daily Double
+                      </label>
+                    </div>
+                  </div>
+                  <button type="button" disabled={Boolean(busy)} onClick={saveSettings}>
+                    {busy === 'save-settings' ? 'Saving…' : 'Save Settings'}
+                  </button>
+                  <button type="button" className="subtle" onClick={toggleSettingsEdit}>
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button type="button" className="subtle" onClick={toggleSettingsEdit}>
+                  Edit Settings
+                </button>
+              )}
+            </div>
+          )}
 
           {!me?.submitted || editingQuestions ? (
             <>
@@ -709,7 +1024,7 @@ function App() {
                     <div className="question-head">
                       <label>Value</label>
                       <select value={draft.value} onChange={(event) => updateDraftValue(draft.localId, event.target.value)}>
-                        {QUESTION_VALUES.map((value) => (
+                        {valuesForCount(room.settings.questionsPerPlayer).map((value) => (
                           <option key={value} value={value}>
                             ${value}
                           </option>
@@ -792,49 +1107,14 @@ function App() {
               />
             </div>
 
-            <div className="control-field">
-              <label>Round mode</label>
-              <select value={roundMode} onChange={(event) => setRoundMode(event.target.value)}>
-                <option value="finite">Finite</option>
-                <option value="infinite">Infinite</option>
-              </select>
-            </div>
-
-            {roundMode === 'finite' && (
-              <div className="control-field">
-                <label>Rounds per team</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="10"
-                  value={roundCountInput}
-                  onChange={(event) => setRoundCountInput(event.target.value)}
-                />
-              </div>
-            )}
-
-            <div className="control-field">
-              <label>Answer timer</label>
-              <select value={timerSecondsInput} onChange={(event) => setTimerSecondsInput(event.target.value)}>
-                {TIMER_OPTIONS.map((seconds) => (
-                  <option key={seconds} value={seconds}>
-                    {seconds === 0 ? 'Off' : `${seconds}s`}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="control-field checkbox-field">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={dailyDoubleEnabled}
-                  onChange={(event) => setDailyDoubleEnabled(event.target.checked)}
-                />
-                Enable Daily Double
-              </label>
-            </div>
           </div>
+
+          <p className="settings-summary">
+            {room.settings.questionsPerPlayer} questions/player ·{' '}
+            {room.settings.mode === 'finite' ? `${room.settings.rounds} round(s)` : 'Infinite rounds'} ·{' '}
+            Timer {room.settings.timerSeconds > 0 ? `${room.settings.timerSeconds}s` : 'off'} ·{' '}
+            Daily Double {room.settings.dailyDouble ? 'on' : 'off'}
+          </p>
 
           <div className="player-pool">
             <h3>Players</h3>

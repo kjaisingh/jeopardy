@@ -41,9 +41,9 @@ const sendRoom = (code) => {
 };
 
 io.on('connection', (socket) => {
-  socket.on('room:create', async ({ name }, ack) => {
+  socket.on('room:create', async ({ name, settings } = {}, ack = () => {}) => {
     try {
-      const result = await gameStore.createRoom(name, socket.id);
+      const result = await gameStore.createRoom(name, socket.id, settings);
       ack({ ok: true, code: result.code, playerId: result.playerId, room: result.room });
       sendRoom(result.code);
     } catch (error) {
@@ -51,7 +51,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('room:join', async ({ code, name }, ack) => {
+  socket.on('room:join', async ({ code, name } = {}, ack = () => {}) => {
     try {
       const result = await gameStore.joinRoom(code, name, socket.id);
       ack({ ok: true, code: result.code, playerId: result.playerId, room: result.room });
@@ -61,17 +61,20 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('room:reconnect', async ({ code, playerId }, ack) => {
+  socket.on('room:reconnect', async ({ code, playerId } = {}, ack = () => {}) => {
     try {
       const result = await gameStore.reconnect(code, playerId, socket.id);
       ack({ ok: true, room: result.room });
+      if (result.supersededSocketId) {
+        io.sockets.sockets.get(result.supersededSocketId)?.emit('session:superseded');
+      }
       sendRoom(result.code);
     } catch (error) {
       ack({ ok: false, message: error.message });
     }
   });
 
-  socket.on('questions:submit', async ({ code, playerId, questions }, ack) => {
+  socket.on('questions:submit', async ({ code, playerId, questions } = {}, ack = () => {}) => {
     try {
       const room = await gameStore.submitQuestions(code, playerId, questions);
       ack({ ok: true });
@@ -81,7 +84,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('lobby:continue', async ({ code, playerId }, ack) => {
+  socket.on('lobby:continue', async ({ code, playerId } = {}, ack = () => {}) => {
     try {
       const room = await gameStore.advanceToTeamSetup(code, playerId);
       ack({ ok: true });
@@ -91,9 +94,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('game:configure', async ({ code, playerId, config }, ack) => {
+  socket.on('game:configure', async ({ code, playerId, config } = {}, ack = () => {}) => {
     try {
-      const room = await gameStore.setTeamsAndSettings(code, playerId, config);
+      const room = await gameStore.setTeams(code, playerId, config);
       ack({ ok: true });
       sendRoom(room.code);
     } catch (error) {
@@ -101,7 +104,17 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('team:score:set', async ({ code, playerId, teamId, score }, ack) => {
+  socket.on('game:settings', async ({ code, playerId, settings } = {}, ack = () => {}) => {
+    try {
+      const room = await gameStore.updateSettings(code, playerId, settings);
+      ack({ ok: true });
+      sendRoom(room.code);
+    } catch (error) {
+      ack({ ok: false, message: error.message });
+    }
+  });
+
+  socket.on('team:score:set', async ({ code, playerId, teamId, score } = {}, ack = () => {}) => {
     try {
       const room = await gameStore.setTeamScore(code, playerId, teamId, score);
       ack({ ok: true });
@@ -111,7 +124,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('question:select', async ({ code, playerId, ownerPlayerId, value }, ack) => {
+  socket.on('question:select', async ({ code, playerId, ownerPlayerId, value } = {}, ack = () => {}) => {
     try {
       const room = await gameStore.selectQuestion(code, playerId, ownerPlayerId, value);
       ack({ ok: true });
@@ -121,7 +134,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('question:attempt', async ({ code, playerId, answer }, ack) => {
+  socket.on('question:attempt', async ({ code, playerId, answer } = {}, ack = () => {}) => {
     try {
       const { room, result } = await gameStore.submitAttempt(code, playerId, answer);
       ack({ ok: true, result });
@@ -131,7 +144,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('question:skip', async ({ code, playerId }, ack) => {
+  socket.on('question:skip', async ({ code, playerId } = {}, ack = () => {}) => {
     try {
       const { room, result } = await gameStore.skipCurrentTeam(code, playerId);
       ack({ ok: true, result });
@@ -141,7 +154,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('question:override', async ({ code, playerId }, ack) => {
+  socket.on('question:override', async ({ code, playerId } = {}, ack = () => {}) => {
     try {
       const { room, result } = await gameStore.overrideLastIncorrect(code, playerId);
       ack({ ok: true, result });
@@ -151,7 +164,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('question:pass', async ({ code, playerId }, ack) => {
+  socket.on('question:pass', async ({ code, playerId } = {}, ack = () => {}) => {
     try {
       const { room, result } = await gameStore.passActiveQuestion(code, playerId);
       ack({ ok: true, result });
@@ -161,7 +174,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('game:restart', async ({ code, playerId }, ack) => {
+  socket.on('game:restart', async ({ code, playerId } = {}, ack = () => {}) => {
     try {
       const restarted = await gameStore.restartGame(code, playerId);
       ack({ ok: true, newCode: restarted.newCode });
@@ -173,7 +186,13 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     const result = gameStore.disconnect(socket.id);
-    if (result) sendRoom(result.code);
+    if (!result) return;
+    sendRoom(result.code);
+    if (result.wasHost) {
+      setTimeout(async () => {
+        if (await gameStore.maybePromoteHost(result.code)) sendRoom(result.code);
+      }, gameStore.HOST_GRACE_MS);
+    }
   });
 });
 

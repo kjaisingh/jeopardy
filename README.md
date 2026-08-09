@@ -3,18 +3,21 @@ Welcome to a highly interactive, custom Jeopardy experience designed to make gam
 
 
 ## Overview
-- **Gather and Join**: One person acts as the host and creates a game room on a main screen, generating a simple six-character code. Everyone else simply opens the website on their own smartphones, tablets, or laptops and enters the code to join the lobby.
-- **Build the Board**: Once you are in, the game asks you to come up with five unique trivia questions and answers. You will assign each of your questions a difficulty value ranging from 100 to 500 points, and together, everyone's submissions automatically build the custom Jeopardy board for that match.
-- **Team Up**: After all the questions are locked in, the host takes over to organize the lobby into custom teams. The host also decides how many rounds the game will last, plus whether to turn on a Daily Double and an answer timer, ensuring the game length and intensity perfectly fit your group's vibe.
+- **Gather and Join**: One person acts as the host, picks the game's settings, and creates a room on a main screen, generating a simple six-character code (and a shareable link + QR code). Everyone else opens the website on their own smartphones, tablets, or laptops — by entering the code, scanning the QR, or tapping the link — to join the lobby.
+- **Build the Board**: Once you are in, the game asks you to come up with the host-configured number of unique trivia questions and answers (1–10 per player, chosen at room creation and editable by the host in the lobby). You will assign each of your questions a difficulty value from 100 points up, and together, everyone's submissions automatically build the custom Jeopardy board for that match.
+- **Team Up**: After all the questions are locked in, the host takes over to organize the lobby into custom teams. Round count, Daily Double, and the answer timer were already dialed in at room creation, ensuring the game length and intensity perfectly fit your group's vibe.
 - **Play and Score**: As the game kicks off, teams take turns selecting questions from the player-generated categories on the main board. When a team guesses an answer, the game acts as a smart virtual judge—it knows when your answer is close enough to be correct so you don't have to worry about perfect spelling, but the host always has a button to manually override the system if a debate breaks out.
 - **Win the Game**: Correct answers boost your team's score, while incorrect ones pass the opportunity to the next team in line. The board updates in real-time across everyone's devices until all the questions are gone, at which point a full-screen results screen crowns the team with the highest score and breaks down the game — standings, toughest question, and every answer nobody got right.
 
 
 ## Gameplay Features
 - **Daily Double**: one random question on the board is secretly worth double. It stays hidden — every open cell reports as a normal question to every viewer, including the host — until a team selects it, at which point a gold banner announces it before the answer is revealed.
-- **Answer timer**: the host can set a per-question countdown (Off, or 10–60 seconds) in team setup. It's shown only on the host screen, resets for each new team's attempt, and expiry counts as that team being unable to answer (the same as the "Can't Answer" button).
+- **Answer timer**: the host can set a per-question countdown (Off, or 10–60 seconds) at room creation, editable in the lobby. It's shown only on the host screen, resets for each new team's attempt, and expiry counts as that team being unable to answer (the same as the "Can't Answer" button).
 - **Sound effects**: short synthesized tones for selects, correct/incorrect answers, the Daily Double reveal, time-up, and game-over. Host-only (so phones don't create an echo), muted state persists across sessions, and the first tap/keypress on the host screen warms up audio playback for Safari/iOS.
 - **Results screen**: a full-screen finish with a winner (or tie) headline, ranked standings with accuracy, and stat highlights including "Nobody got these" — the answers to every passed or missed question, revealed at last.
+- **Share link + QR join**: the host lobby shows a QR code and a Copy Link button alongside the room code; scanning or opening the link prefills the join code so players can hop in without typing it.
+- **Host failover**: if the host's device disconnects mid-game, the server auto-promotes the longest-connected player to host after a short grace period, with a banner announcing the new host — no one else needs to wait around for the original host to come back.
+- **Duplicate-session handling**: opening the same player's session on a second device notifies the first device ("This game is now open on another device.") with a Use Here button to reclaim it, so switching devices mid-game never silently orphans a screen.
 
 
 ## Feature Backlog

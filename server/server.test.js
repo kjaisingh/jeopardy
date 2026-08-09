@@ -4,16 +4,31 @@ import { isAnswerCorrect } from './match.js';
 import { requiredText, requiredInteger, requiredOneOf, assertUniqueNames } from './validate.js';
 import { gameStore } from './gameStore.js';
 
-const questionsFor = (label) =>
-  gameStore.QUESTION_VALUES.map((value) => ({
+const DEFAULT_SETTINGS = { mode: 'finite', rounds: 1, dailyDouble: false, timerSeconds: 0, questionsPerPlayer: 5 };
+
+const questionsFor = (label, count = 5) =>
+  gameStore.valuesForCount(count).map((value) => ({
     prompt: `${label} prompt ${value}`,
     answer: `${label}-answer-${value}`,
     value
   }));
 
-const setupGame = async ({ playerCount = 2, mode = 'finite', rounds = 1, dailyDouble = false, timerSeconds = 0 } = {}) => {
+const setupGame = async ({
+  playerCount = 2,
+  mode = 'finite',
+  rounds = 1,
+  dailyDouble = false,
+  timerSeconds = 0,
+  questionsPerPlayer = 5
+} = {}) => {
   const hostSocketId = `socket-host-${Math.random()}`;
-  const host = await gameStore.createRoom('Host', hostSocketId);
+  const host = await gameStore.createRoom('Host', hostSocketId, {
+    mode,
+    rounds,
+    dailyDouble,
+    timerSeconds,
+    questionsPerPlayer
+  });
   const players = [{ id: host.playerId, name: 'Host', socketId: hostSocketId }];
 
   for (let index = 1; index < playerCount; index += 1) {
@@ -24,13 +39,13 @@ const setupGame = async ({ playerCount = 2, mode = 'finite', rounds = 1, dailyDo
   }
 
   for (const player of players) {
-    await gameStore.submitQuestions(host.code, player.id, questionsFor(player.name));
+    await gameStore.submitQuestions(host.code, player.id, questionsFor(player.name, questionsPerPlayer));
   }
 
   await gameStore.advanceToTeamSetup(host.code, host.playerId);
 
   const teams = players.map((player, index) => ({ name: `Team${index + 1}`, playerIds: [player.id] }));
-  const room = await gameStore.setTeamsAndSettings(host.code, host.playerId, { teams, mode, rounds, dailyDouble, timerSeconds });
+  const room = await gameStore.setTeams(host.code, host.playerId, { teams });
 
   return { code: host.code, hostPlayerId: host.playerId, players, room };
 };
@@ -116,33 +131,22 @@ test('gameStore: blank attempt answer is rejected with a readable message, no Ty
 });
 
 test('gameStore: malformed question submissions are rejected', async () => {
-  const host = await gameStore.createRoom('Host', 'socket-malformed');
+  const host = await gameStore.createRoom('Host', 'socket-malformed', DEFAULT_SETTINGS);
   await assert.rejects(
     () => gameStore.submitQuestions(host.code, host.playerId, [null, null, null, null, null]),
     /Every question must have prompt and answer/
   );
 });
 
-test('gameStore: setTeamsAndSettings rejects an out-of-range rounds value', async () => {
-  const host = await gameStore.createRoom('Host', 'socket-rounds');
-  await gameStore.submitQuestions(host.code, host.playerId, questionsFor('Host'));
-  await gameStore.advanceToTeamSetup(host.code, host.playerId);
-
+test('gameStore: createRoom rejects an out-of-range rounds value', async () => {
   await assert.rejects(
-    () =>
-      gameStore.setTeamsAndSettings(host.code, host.playerId, {
-        teams: [{ name: 'Team1', playerIds: [host.playerId] }],
-        mode: 'finite',
-        rounds: 1e9,
-        dailyDouble: false,
-        timerSeconds: 0
-      }),
+    () => gameStore.createRoom('Host', 'socket-rounds', { ...DEFAULT_SETTINGS, rounds: 1e9 }),
     /Rounds must be between/
   );
 });
 
 test('gameStore: setTeamScore is gated to playing/finished phases', async () => {
-  const host = await gameStore.createRoom('Host', 'socket-score-gate');
+  const host = await gameStore.createRoom('Host', 'socket-score-gate', DEFAULT_SETTINGS);
   await assert.rejects(
     () => gameStore.setTeamScore(host.code, host.playerId, 'any-team', 100),
     /Scores can only be edited during or after play/
@@ -381,4 +385,183 @@ test('gameStore: editing a score after the game ends recomputes the winner', asy
 
   assert.equal(updated.winnerTeamId, teamA.id);
   assert.deepEqual(updated.tiedTeamIds, []);
+});
+
+// --- Host auto-promote failover -------------------------------------------------
+
+test('gameStore: host disconnect auto-promotes the longest-connected player after grace, pushes host-changed', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-promote-host', DEFAULT_SETTINGS);
+  const p1 = await gameStore.joinRoom(host.code, 'P1', 'socket-promote-p1');
+  await gameStore.joinRoom(host.code, 'P2', 'socket-promote-p2');
+
+  const disconnectResult = gameStore.disconnect('socket-promote-host');
+  assert.deepEqual(disconnectResult, { code: host.code, wasHost: true });
+
+  const promotedTooSoon = await gameStore.maybePromoteHost(host.code);
+  assert.equal(promotedTooSoon, false);
+
+  await new Promise((resolve) => setTimeout(resolve, gameStore.HOST_GRACE_MS + 10));
+
+  const promoted = await gameStore.maybePromoteHost(host.code);
+  assert.equal(promoted, true);
+
+  const view = gameStore.roomViews(host.code).find((entry) => entry.socketId === 'socket-promote-p1');
+  assert.equal(view.room.hostPlayerId, p1.playerId);
+  assert.equal(view.room.events.at(-1).type, 'host-changed');
+  assert.equal(view.room.events.at(-1).newHostName, 'P1');
+
+  const promotedAgain = await gameStore.maybePromoteHost(host.code);
+  assert.equal(promotedAgain, false);
+});
+
+test('gameStore: host reconnecting within the grace period keeps them as host', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-promote3-host', DEFAULT_SETTINGS);
+  await gameStore.joinRoom(host.code, 'P1', 'socket-promote3-p1');
+
+  gameStore.disconnect('socket-promote3-host');
+  const reconnected = await gameStore.reconnect(host.code, host.playerId, 'socket-promote3-host-new');
+  assert.equal(reconnected.room.hostPlayerId, host.playerId);
+
+  await new Promise((resolve) => setTimeout(resolve, gameStore.HOST_GRACE_MS + 10));
+  const promoted = await gameStore.maybePromoteHost(host.code);
+  assert.equal(promoted, false);
+});
+
+test('gameStore: promotion no-ops when nobody is connected, then fires on the next reconnect', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-promote2-host', DEFAULT_SETTINGS);
+  const p1 = await gameStore.joinRoom(host.code, 'P1', 'socket-promote2-p1');
+
+  gameStore.disconnect('socket-promote2-host');
+  gameStore.disconnect('socket-promote2-p1');
+
+  await new Promise((resolve) => setTimeout(resolve, gameStore.HOST_GRACE_MS + 10));
+
+  const promotedWithNobodyConnected = await gameStore.maybePromoteHost(host.code);
+  assert.equal(promotedWithNobodyConnected, false);
+
+  const reconnected = await gameStore.reconnect(host.code, p1.playerId, 'socket-promote2-p1-new');
+  assert.equal(reconnected.room.hostPlayerId, p1.playerId);
+});
+
+// --- Duplicate-session supersede ------------------------------------------------
+
+test('gameStore: reconnecting with a live prior socket supersedes it; the old socket disconnect is a no-op', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-super-host', DEFAULT_SETTINGS);
+  const p1 = await gameStore.joinRoom(host.code, 'P1', 'socket-super-p1-a');
+
+  const reconnected = await gameStore.reconnect(host.code, p1.playerId, 'socket-super-p1-b');
+  assert.equal(reconnected.supersededSocketId, 'socket-super-p1-a');
+
+  const disconnectResult = gameStore.disconnect('socket-super-p1-a');
+  assert.equal(disconnectResult, null);
+});
+
+// --- Configurable question count -------------------------------------------------
+
+test('gameStore: submitQuestions rejects a wrong-length submission naming the expected count', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-qcount', { ...DEFAULT_SETTINGS, questionsPerPlayer: 3 });
+  await assert.rejects(
+    () => gameStore.submitQuestions(host.code, host.playerId, questionsFor('Host', 2)),
+    /Exactly 3 question/
+  );
+});
+
+test('gameStore: submitQuestions rejects a submission missing a required value level', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-qmissing', { ...DEFAULT_SETTINGS, questionsPerPlayer: 3 });
+  const questions = questionsFor('Host', 3);
+  questions[2].value = questions[0].value;
+  await assert.rejects(
+    () => gameStore.submitQuestions(host.code, host.playerId, questions),
+    /Questions must use values 100, 200, 300 once each/
+  );
+});
+
+test('gameStore: submitQuestions rejects duplicate values even at the right length', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-qdup', { ...DEFAULT_SETTINGS, questionsPerPlayer: 3 });
+  const questions = questionsFor('Host', 3).map((question) => ({ ...question, value: 100 }));
+  await assert.rejects(
+    () => gameStore.submitQuestions(host.code, host.playerId, questions),
+    /Questions must use values 100, 200, 300 once each/
+  );
+});
+
+test('gameStore: submitQuestions accepts correct coverage of every value level', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-qok', { ...DEFAULT_SETTINGS, questionsPerPlayer: 3 });
+  const room = await gameStore.submitQuestions(host.code, host.playerId, questionsFor('Host', 3));
+  assert.equal(room.players.find((player) => player.id === host.playerId).submitted, true);
+});
+
+test('gameStore: createRoom validates and persists the chosen settings', async () => {
+  const settings = { mode: 'infinite', rounds: null, dailyDouble: true, timerSeconds: 20, questionsPerPlayer: 8 };
+  const host = await gameStore.createRoom('Host', 'socket-settings-create', settings);
+  assert.deepEqual(host.room.settings, settings);
+});
+
+test('gameStore: updateSettings rejects a non-host caller', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-settings-nonhost', DEFAULT_SETTINGS);
+  const p1 = await gameStore.joinRoom(host.code, 'P1', 'socket-settings-nonhost-p1');
+
+  await assert.rejects(
+    () => gameStore.updateSettings(host.code, p1.playerId, DEFAULT_SETTINGS),
+    /Only host can change settings/
+  );
+});
+
+test('gameStore: updateSettings rejects changes outside the lobby phase', async () => {
+  const { code, hostPlayerId } = await setupGame();
+  await assert.rejects(
+    () => gameStore.updateSettings(code, hostPlayerId, DEFAULT_SETTINGS),
+    /Settings can only change in the lobby/
+  );
+});
+
+test("gameStore: shrinking questionsPerPlayer trims a submitted player's questions and flips submitted to false", async () => {
+  const host = await gameStore.createRoom('Host', 'socket-settings-shrink', { ...DEFAULT_SETTINGS, questionsPerPlayer: 5 });
+  await gameStore.submitQuestions(host.code, host.playerId, questionsFor('Host', 5));
+
+  const updated = await gameStore.updateSettings(host.code, host.playerId, { ...DEFAULT_SETTINGS, questionsPerPlayer: 3 });
+
+  const self = updated.players.find((player) => player.id === host.playerId);
+  assert.equal(self.submitted, false);
+  assert.equal(self.questions.length, 3);
+  assert.equal(updated.events.at(-1).type, 'settings-changed');
+});
+
+test('gameStore: restarting a finished game preserves the original settings on the new code', async () => {
+  const { code, hostPlayerId, room } = await setupGame({ playerCount: 2, dailyDouble: true, questionsPerPlayer: 3 });
+  const finished = await passAllQuestions(code, hostPlayerId, room);
+  assert.equal(finished.phase, 'finished');
+
+  const restarted = await gameStore.restartGame(code, hostPlayerId);
+  assert.equal(restarted.room.settings.dailyDouble, true);
+  assert.equal(restarted.room.settings.questionsPerPlayer, 3);
+});
+
+// --- Persistence -----------------------------------------------------------------
+
+test('gameStore: serialize/deserialize round-trips hostDisconnectedAt and questionsPerPlayer', () => {
+  const sampleRoom = {
+    code: 'ABCDEF',
+    hostPlayerId: 'host-1',
+    hostDisconnectedAt: 1700000000000,
+    phase: 'lobby',
+    players: new Map([['host-1', { id: 'host-1', name: 'Host', socketId: null, submitted: false, questions: [] }]]),
+    settings: { mode: 'finite', rounds: 1, dailyDouble: false, timerSeconds: 0, questionsPerPlayer: 7 },
+    teams: [],
+    turnTeamId: null,
+    board: null,
+    activeQuestion: null,
+    lastWrongAttempt: null,
+    winnerTeamId: null,
+    tiedTeamIds: [],
+    events: [],
+    eventSeq: 0,
+    history: []
+  };
+
+  const snapshot = gameStore.serializeRoom(sampleRoom);
+  const restored = gameStore.deserializeRoom(snapshot);
+
+  assert.equal(restored.hostDisconnectedAt, 1700000000000);
+  assert.equal(restored.settings.questionsPerPlayer, 7);
 });

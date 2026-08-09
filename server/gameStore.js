@@ -12,14 +12,22 @@ import {
 } from './validate.js';
 
 const makeCode = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 6);
-const QUESTION_VALUES = [100, 200, 300, 400, 500];
 const MAX_EVENTS = 30;
+const HOST_GRACE_MS = Number(process.env.HOST_GRACE_MS || 30000);
 
 const rooms = new Map();
 
 const byName = (left, right) => left.name.localeCompare(right.name);
 
-const defaultSettings = () => ({ mode: 'finite', rounds: 1, dailyDouble: false, timerSeconds: 0 });
+const valuesForCount = (count) => Array.from({ length: count }, (_, i) => (i + 1) * 100);
+
+const defaultSettings = () => ({
+  mode: 'finite',
+  rounds: 1,
+  dailyDouble: false,
+  timerSeconds: 0,
+  questionsPerPlayer: 5
+});
 
 const toStoredPlayer = (player) => ({
   id: player.id,
@@ -31,6 +39,7 @@ const toStoredPlayer = (player) => ({
 const serializeRoom = (room) => ({
   code: room.code,
   hostPlayerId: room.hostPlayerId,
+  hostDisconnectedAt: room.hostDisconnectedAt,
   phase: room.phase,
   players: [...room.players.values()].map(toStoredPlayer),
   settings: room.settings,
@@ -49,6 +58,7 @@ const serializeRoom = (room) => ({
 const deserializeRoom = (snapshot) => ({
   code: snapshot.code,
   hostPlayerId: snapshot.hostPlayerId,
+  hostDisconnectedAt: snapshot.hostDisconnectedAt || null,
   phase: snapshot.phase || 'lobby',
   players: new Map(
     (snapshot.players || []).map((player) => [
@@ -176,9 +186,11 @@ const getPlayerBySocket = (socketId) => {
   return null;
 };
 
-const validateQuestions = (questions) => {
-  if (!Array.isArray(questions) || questions.length !== 5) {
-    throw new Error('Exactly five questions are required');
+const validateQuestions = (questions, count) => {
+  const expectedValues = valuesForCount(count);
+
+  if (!Array.isArray(questions) || questions.length !== count) {
+    throw new Error(`Exactly ${count} question${count === 1 ? '' : 's'} are required`);
   }
 
   const normalized = questions.map((entry) => {
@@ -193,21 +205,22 @@ const validateQuestions = (questions) => {
   });
 
   const uniqueValues = new Set(normalized.map((entry) => entry.value));
-  if (uniqueValues.size !== 5 || !QUESTION_VALUES.every((value) => uniqueValues.has(value))) {
-    throw new Error('Questions must use values 100, 200, 300, 400, and 500 once each');
+  if (uniqueValues.size !== count || !expectedValues.every((value) => uniqueValues.has(value))) {
+    throw new Error(`Questions must use values ${expectedValues.join(', ')} once each`);
   }
 
   return normalized;
 };
 
 const initializeBoard = (room) => {
+  const values = valuesForCount(room.settings.questionsPerPlayer);
   const columns = [...room.players.values()].sort(byName).map((player) => ({
     playerId: player.id,
     playerName: player.name,
-    cells: QUESTION_VALUES.map((value) => ({ value, status: 'open', multiplier: 1 }))
+    cells: values.map((value) => ({ value, status: 'open', multiplier: 1 }))
   }));
 
-  room.board = { values: QUESTION_VALUES, columns };
+  room.board = { values, columns };
 
   if (room.settings.dailyDouble) {
     const allCells = columns.flatMap((column) => column.cells);
@@ -364,7 +377,6 @@ const buildAttemptOrder = (teams, selectedTeamId, settings) => {
 const resetForNewRound = (room, nextCode) => {
   room.code = nextCode;
   room.phase = 'lobby';
-  room.settings = defaultSettings();
   room.teams = [];
   room.turnTeamId = null;
   room.board = null;
@@ -382,8 +394,25 @@ const resetForNewRound = (room, nextCode) => {
   });
 };
 
+const validateSettings = (payload) => {
+  const mode = requiredOneOf(payload.mode, 'Mode', ['finite', 'infinite']);
+  const rounds = mode === 'finite' ? requiredInteger(payload.rounds, 'Rounds', LIMITS.rounds) : null;
+  const dailyDouble = requiredBoolean(payload.dailyDouble, 'Daily Double');
+  const timerSeconds = requiredInteger(payload.timerSeconds, 'Timer', LIMITS.timerSeconds);
+  const questionsPerPlayer = requiredInteger(
+    payload.questionsPerPlayer,
+    'Questions per player',
+    LIMITS.questionsPerPlayer
+  );
+
+  return { mode, rounds, dailyDouble, timerSeconds, questionsPerPlayer };
+};
+
 export const gameStore = {
-  QUESTION_VALUES,
+  HOST_GRACE_MS,
+  valuesForCount,
+  serializeRoom,
+  deserializeRoom,
 
   persistenceEnabled() {
     return roomRepository.isEnabled();
@@ -393,16 +422,18 @@ export const gameStore = {
     return roomRepository.getConfigError();
   },
 
-  async createRoom(rawName, socketId) {
+  async createRoom(rawName, socketId, rawSettings) {
     const name = requiredText(rawName, 'Name', LIMITS.name);
+    const settings = validateSettings(rawSettings || {});
     const code = await generateUniqueCode();
     const playerId = crypto.randomUUID();
     const room = {
       code,
       hostPlayerId: playerId,
+      hostDisconnectedAt: null,
       phase: 'lobby',
       players: new Map(),
-      settings: defaultSettings(),
+      settings,
       teams: [],
       turnTeamId: null,
       board: null,
@@ -443,8 +474,19 @@ export const gameStore = {
     const room = await ensureRoom(rawCode);
     const player = room.players.get(playerId);
     if (!player) throw new Error('Player not found');
+
+    const prevSocketId = player.socketId;
     player.socketId = socketId;
-    return { code: room.code, room: publicRoom(room, playerId) };
+
+    if (playerId === room.hostPlayerId) {
+      room.hostDisconnectedAt = null;
+    }
+
+    await this.maybePromoteHost(room.code);
+    await persistRoom(room);
+
+    const supersededSocketId = prevSocketId && prevSocketId !== socketId ? prevSocketId : null;
+    return { code: room.code, room: publicRoom(room, playerId), supersededSocketId };
   },
 
   async submitQuestions(rawCode, playerId, questions) {
@@ -453,7 +495,7 @@ export const gameStore = {
     const player = room.players.get(playerId);
     if (!player) throw new Error('Player not found');
 
-    player.questions = validateQuestions(questions);
+    player.questions = validateQuestions(questions, room.settings.questionsPerPlayer);
     player.submitted = true;
 
     await persistRoom(room);
@@ -473,7 +515,7 @@ export const gameStore = {
     return publicRoom(room, hostPlayerId);
   },
 
-  async setTeamsAndSettings(rawCode, hostPlayerId, payload) {
+  async setTeams(rawCode, hostPlayerId, payload) {
     const room = await ensureRoom(rawCode);
     if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can configure teams');
     if (!Array.isArray(payload.teams) || payload.teams.length < 1) throw new Error('At least one team is required');
@@ -501,12 +543,6 @@ export const gameStore = {
     assertUniqueNames(teamNames, 'Team name');
     if (assignedPlayers.size !== allPlayers.size) throw new Error('All players must be assigned to a team');
 
-    const mode = requiredOneOf(payload.mode, 'Mode', ['finite', 'infinite']);
-    const rounds = mode === 'finite' ? requiredInteger(payload.rounds, 'Rounds', LIMITS.rounds) : null;
-    const dailyDouble = requiredBoolean(payload.dailyDouble, 'Daily Double');
-    const timerSeconds = requiredInteger(payload.timerSeconds, 'Timer', LIMITS.timerSeconds);
-
-    room.settings = { mode, rounds, dailyDouble, timerSeconds };
     room.teams = teams;
     room.turnTeamId = teams[0].id;
     room.phase = 'playing';
@@ -514,6 +550,29 @@ export const gameStore = {
     room.tiedTeamIds = [];
 
     initializeBoard(room);
+    await persistRoom(room);
+    return publicRoom(room, hostPlayerId);
+  },
+
+  async updateSettings(rawCode, hostPlayerId, rawSettings) {
+    const room = await ensureRoom(rawCode);
+    if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can change settings');
+    if (room.phase !== 'lobby') throw new Error('Settings can only change in the lobby');
+
+    const settings = validateSettings(rawSettings);
+    const countChanged = settings.questionsPerPlayer !== room.settings.questionsPerPlayer;
+    room.settings = settings;
+
+    if (countChanged) {
+      room.players.forEach((player) => {
+        if (player.submitted) {
+          player.questions = player.questions.slice(0, settings.questionsPerPlayer);
+          player.submitted = false;
+        }
+      });
+      pushEvent(room, { type: 'settings-changed' });
+    }
+
     await persistRoom(room);
     return publicRoom(room, hostPlayerId);
   },
@@ -541,7 +600,9 @@ export const gameStore = {
     if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can select questions');
     if (room.phase !== 'playing') throw new Error('Game is not in playing phase');
     if (room.activeQuestion) throw new Error('Another question is active');
-    if (!QUESTION_VALUES.includes(Number(value))) throw new Error('Invalid question value');
+    if (!valuesForCount(room.settings.questionsPerPlayer).includes(Number(value))) {
+      throw new Error('Invalid question value');
+    }
 
     const { cell } = findCell(room, ownerPlayerId, value);
     if (!cell || cell.status !== 'open') throw new Error('Question unavailable');
@@ -670,8 +731,33 @@ export const gameStore = {
   disconnect(socketId) {
     const located = getPlayerBySocket(socketId);
     if (!located) return null;
-    located.player.socketId = null;
-    return { code: located.room.code };
+
+    const { room, player } = located;
+    player.socketId = null;
+
+    const wasHost = player.id === room.hostPlayerId;
+    if (wasHost) room.hostDisconnectedAt = Date.now();
+
+    return { code: room.code, wasHost };
+  },
+
+  async maybePromoteHost(rawCode) {
+    const room = rooms.get(normalizeRoomCode(rawCode));
+    if (!room) return false;
+
+    const host = room.players.get(room.hostPlayerId);
+    if (!room.hostDisconnectedAt || host?.socketId) return false;
+    if (Date.now() - room.hostDisconnectedAt < HOST_GRACE_MS) return false;
+
+    const nextHost = [...room.players.values()].find((player) => player.socketId);
+    if (!nextHost) return false;
+
+    room.hostPlayerId = nextHost.id;
+    room.hostDisconnectedAt = null;
+    pushEvent(room, { type: 'host-changed', newHostName: nextHost.name });
+
+    await persistRoom(room);
+    return true;
   },
 
   roomViews(rawCode) {
