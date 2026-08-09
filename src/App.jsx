@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import QRCode from 'qrcode';
 import { ResultsScreen } from './ResultsScreen.jsx';
@@ -241,8 +241,9 @@ function App() {
     }
   };
 
-  // Flash drain: promote the next unseen event to a banner, one at a time.
-  useEffect(() => {
+  // Flash drain: promote the next unseen event to a banner, one at a time. Layout-timed so a
+  // game-over preemption lands before paint and never bleeds a stale banner into Results.
+  useLayoutEffect(() => {
     const events = room?.events || [];
     if (!events.length) return;
     const tail = tailSeq(events);
@@ -250,10 +251,21 @@ function App() {
       setFlashCursor(tail);
       return;
     }
+    // Game-over always preempts whatever's showing, so the last question's banner never bleeds into Results.
+    const gameOver = events.find((event) => event.seq > flashCursor && event.type === 'game-over');
+    if (gameOver) {
+      setFlashCursor(gameOver.seq);
+      const mapped = toFlash(gameOver, teamMap);
+      const soundName = SOUND_BY_TYPE[gameOver.type];
+      if (soundName) play(soundName);
+      setFlash({ id: gameOver.seq, ...mapped, questionKey: null, visible: true });
+      return;
+    }
     if (flash) return;
-    const next = events.find((event) => event.seq > flashCursor);
-    if (!next) return;
-    setFlashCursor(next.seq);
+    const pending = events.filter((event) => event.seq > flashCursor);
+    if (!pending.length) return;
+    const next = pending[pending.length - 1];
+    setFlashCursor(tail);
     const mapped = toFlash(next, teamMap);
     if (!mapped) return;
     const soundName = SOUND_BY_TYPE[next.type];
@@ -281,13 +293,13 @@ function App() {
     return () => window.clearTimeout(exitTimeout);
   }, [flash]);
 
-  // Kill a stale banner the instant a new question opens.
-  useEffect(() => {
+  // Kill a stale banner the instant a new question opens (before paint, so it never overlaps the new overlay).
+  useLayoutEffect(() => {
     setFlash((current) => {
       if (!current?.questionKey || !questionKey) return current;
       return current.questionKey === questionKey ? current : null;
     });
-  }, [questionKey]);
+  }, [questionKey, flash]);
 
   useEffect(() => {
     if (!notice) return undefined;
@@ -336,6 +348,16 @@ function App() {
       setSession((current) => (current ? { ...current, code: room.code } : current));
     }
   }, [room?.code, session?.code]);
+
+  // A restart hands out a brand-new room code — drop any banner still fading from the old game.
+  const prevRoomCodeRef = useRef(room?.code);
+  useEffect(() => {
+    if (room?.code && prevRoomCodeRef.current && room.code !== prevRoomCodeRef.current) {
+      setFlash(null);
+      setFlashCursor(null);
+    }
+    prevRoomCodeRef.current = room?.code;
+  }, [room?.code]);
 
   const teamCount = room?.players?.length
     ? Math.min(Math.max(Math.floor(Number(teamCountInput)) || 1, 1), room.players.length)

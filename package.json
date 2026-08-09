@@ -27,6 +27,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.2",
     "nodemon": "^3.1.9",
+    "playwright": "^1.62.1",
     "vite": "^5.4.14"
   },
   "engines": {
