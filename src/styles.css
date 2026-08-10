@@ -33,6 +33,15 @@ body {
   padding: 24px 0;
 }
 
+@media (min-width: 760px) {
+  .home-screen {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: center;
+  }
+}
+
 .card {
   border: 1px solid #2e3f8e;
   border-radius: 14px;
@@ -385,7 +394,8 @@ button:disabled {
 
 .board-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 220px));
+  justify-content: center;
   gap: 10px;
 }
 
