@@ -12,12 +12,14 @@ Welcome to a highly interactive, custom Jeopardy experience designed to make gam
 
 ## Gameplay Features
 - **Daily Double**: one random question on the board is secretly worth double. It stays hidden — every open cell reports as a normal question to every viewer, including the host — until a team selects it, at which point a gold banner announces it before the answer is revealed.
-- **Answer timer**: the host can set a per-question countdown (Off, or 10–120 seconds) at room creation, editable in the lobby. It's shown only on the host screen, resets for each new team's attempt, and expiry counts as that team being unable to answer (the same as the "Can't Answer" button).
+- **Answer timer**: the host can set a per-question countdown (Off, or 30–180 seconds in 30-second steps) at room creation, editable in the lobby. It's shown only on the host screen, resets for each new team's attempt, and expiry counts as that team being unable to answer (the same as the "Skip Question" button).
 - **Sound effects**: short synthesized tones for selects, correct/incorrect answers, the Daily Double reveal, time-up, and game-over. Host-only (so phones don't create an echo), muted state persists across sessions, and the first tap/keypress on the host screen warms up audio playback for Safari/iOS.
 - **Results screen**: a full-screen finish with a winner (or tie) headline, ranked standings with accuracy, and stat highlights including "Nobody got these" — the answers to every passed or missed question, revealed at last.
 - **Share link + QR join**: the host lobby shows a QR code and a Copy Link button alongside the room code; scanning or opening the link prefills the join code so players can hop in without typing it.
 - **Host failover**: if the host's device disconnects mid-game, the server auto-promotes the longest-connected player to host after a short grace period, with a banner announcing the new host — no one else needs to wait around for the original host to come back.
 - **Duplicate-session handling**: opening the same player's session on a second device notifies the first device ("This game is now open on another device.") with a Use Here button to reclaim it, so switching devices mid-game never silently orphans a screen.
+- **Host lobby controls**: the host can edit game settings after questions are submitted (players are notified to review and resubmit), and remove a player from the lobby before the game starts.
+- **Help modal**: a "?" button on the home screen and in-game explains the game flow, the Submit/Override Previous/Pass/Skip Question buttons, Daily Double, timer/round modes, and host powers.
 
 ## Known Limitations
 - **Room persistence is best-effort.** If the Supabase env vars are omitted, or Supabase is unreachable/misconfigured, the app still runs on in-memory state only and active games will not survive a server restart. It never blocks gameplay.

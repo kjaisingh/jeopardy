@@ -1,20 +1,28 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 export function HelpModal({ onClose }) {
+  const closeButtonRef = useRef(null);
+
   useEffect(() => {
+    const previouslyFocused = document.activeElement;
+    closeButtonRef.current?.focus();
+
     const onKeyDown = (event) => {
       if (event.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      previouslyFocused?.focus?.();
+    };
   }, [onClose]);
 
   return (
     <div className="help-overlay" onClick={onClose}>
-      <div className="help-card" onClick={(event) => event.stopPropagation()}>
+      <div className="help-card" role="dialog" aria-modal="true" aria-label="How to play" onClick={(event) => event.stopPropagation()}>
         <div className="help-head">
           <h2>How to Play</h2>
-          <button type="button" className="help-close" aria-label="Close help" onClick={onClose}>
+          <button type="button" className="help-close" aria-label="Close help" ref={closeButtonRef} onClick={onClose}>
             ×
           </button>
         </div>
@@ -39,11 +47,11 @@ export function HelpModal({ onClose }) {
               attempt correct instead if it was judged wrong by mistake.
             </li>
             <li>
-              <strong>Pass</strong> — give up the current team's turn on this question without ending it, so
-              another team can attempt it.
+              <strong>Pass</strong> — close out the question entirely with no team credited.
             </li>
             <li>
-              <strong>Skip Question</strong> — close out the question entirely with no team credited.
+              <strong>Skip Question</strong> — give up the current team's turn on this question without ending
+              it, so another team can attempt it.
             </li>
           </ul>
         </div>
