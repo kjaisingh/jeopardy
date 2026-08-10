@@ -184,6 +184,22 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('room:leave', async ({ code, playerId } = {}, ack = () => {}) => {
+    try {
+      const result = await gameStore.leaveRoom(code, playerId);
+      ack({ ok: true });
+      if (!result) return;
+      sendRoom(result.code);
+      if (result.wasHost) {
+        setTimeout(async () => {
+          if (await gameStore.maybePromoteHost(result.code)) sendRoom(result.code);
+        }, gameStore.HOST_GRACE_MS);
+      }
+    } catch (error) {
+      ack({ ok: false, message: error.message });
+    }
+  });
+
   socket.on('disconnect', () => {
     const result = gameStore.disconnect(socket.id);
     if (!result) return;

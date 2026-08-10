@@ -12,7 +12,7 @@ Welcome to a highly interactive, custom Jeopardy experience designed to make gam
 
 ## Gameplay Features
 - **Daily Double**: one random question on the board is secretly worth double. It stays hidden — every open cell reports as a normal question to every viewer, including the host — until a team selects it, at which point a gold banner announces it before the answer is revealed.
-- **Answer timer**: the host can set a per-question countdown (Off, or 10–60 seconds) at room creation, editable in the lobby. It's shown only on the host screen, resets for each new team's attempt, and expiry counts as that team being unable to answer (the same as the "Can't Answer" button).
+- **Answer timer**: the host can set a per-question countdown (Off, or 10–120 seconds) at room creation, editable in the lobby. It's shown only on the host screen, resets for each new team's attempt, and expiry counts as that team being unable to answer (the same as the "Can't Answer" button).
 - **Sound effects**: short synthesized tones for selects, correct/incorrect answers, the Daily Double reveal, time-up, and game-over. Host-only (so phones don't create an echo), muted state persists across sessions, and the first tap/keypress on the host screen warms up audio playback for Safari/iOS.
 - **Results screen**: a full-screen finish with a winner (or tie) headline, ranked standings with accuracy, and stat highlights including "Nobody got these" — the answers to every passed or missed question, revealed at last.
 - **Share link + QR join**: the host lobby shows a QR code and a Copy Link button alongside the room code; scanning or opening the link prefills the join code so players can hop in without typing it.

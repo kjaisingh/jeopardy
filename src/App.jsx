@@ -10,7 +10,7 @@ const NAME_MAX = 24;
 const PROMPT_MAX = 300;
 const ANSWER_MAX = 120;
 const ATTEMPT_MAX = 200;
-const TIMER_OPTIONS = [0, 10, 15, 20, 30, 45, 60];
+const TIMER_OPTIONS = [0, 10, 15, 20, 30, 45, 60, 90, 120];
 
 const socketUrl =
   import.meta.env.VITE_SERVER_URL ||
@@ -27,6 +27,18 @@ const blankDraft = (count) =>
     prompt: '',
     answer: ''
   }));
+
+const buildTeams = (count, players) => {
+  const teams = Array.from({ length: count }, (_, index) => ({
+    id: crypto.randomUUID(),
+    name: `Team ${index + 1}`,
+    playerIds: []
+  }));
+  players.forEach((player, index) => {
+    teams[index % count].playerIds.push(player.id);
+  });
+  return teams;
+};
 
 const reconcileDrafts = (current, targetCount) => {
   const next = [...current];
@@ -370,15 +382,7 @@ function App() {
     const coversRoomExactly =
       currentIds.size === configuredIds.size && [...currentIds].every((id) => configuredIds.has(id));
     if (coversRoomExactly) return;
-    const teams = Array.from({ length: teamCount }, (_, index) => ({
-      id: crypto.randomUUID(),
-      name: `Team ${index + 1}`,
-      playerIds: []
-    }));
-    room.players.forEach((player, index) => {
-      teams[index % teamCount].playerIds.push(player.id);
-    });
-    setTeamConfig(teams);
+    setTeamConfig(buildTeams(teamCount, room.players));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [room, isHost, teamCount]);
 
@@ -461,6 +465,9 @@ function App() {
   };
 
   const leaveCompletely = () => {
+    if (session?.code && session?.playerId) {
+      call('room:leave', { code: session.code, playerId: session.playerId }).catch(() => {});
+    }
     resetToHome();
     setSuppressAutoResume(false);
     setSession(null);
@@ -573,15 +580,7 @@ function App() {
     setTeamCountInput(nextCountInput);
     if (!room) return;
     const count = Math.min(Math.max(Math.floor(Number(nextCountInput)) || 1, 1), room.players.length);
-    const teams = Array.from({ length: count }, (_, index) => ({
-      id: crypto.randomUUID(),
-      name: `Team ${index + 1}`,
-      playerIds: []
-    }));
-    room.players.forEach((player, index) => {
-      teams[index % count].playerIds.push(player.id);
-    });
-    setTeamConfig(teams);
+    setTeamConfig(buildTeams(count, room.players));
   };
 
   const movePlayerTeam = (playerId, teamId) => {
@@ -793,9 +792,9 @@ function App() {
             <h2>Join a Game</h2>
             <input
               value={joinCode}
-              maxLength={8}
+              maxLength={6}
               placeholder="Room code"
-              onChange={(event) => setJoinCode(event.target.value)}
+              onChange={(event) => setJoinCode(event.target.value.toUpperCase())}
             />
             <input
               value={joinName}
@@ -940,9 +939,11 @@ function App() {
       {notice && <div className="pill notice">{notice}</div>}
 
       {room.phase === 'lobby' && isHost && qrDataUrl && (
-        <section className="card">
-          <h2>Invite Players</h2>
-          <p>Scan to join, or use Copy Link above.</p>
+        <section className="card invite-card">
+          <div>
+            <h2>Invite Players</h2>
+            <p>Scan to join, or use Copy Link above.</p>
+          </div>
           <img src={qrDataUrl} alt="QR code to join game" className="qr-code" />
         </section>
       )}
@@ -1117,20 +1118,6 @@ function App() {
         <section className="card team-layout">
           <h2>Team Setup</h2>
 
-          <div className="inline-controls">
-            <div className="control-field">
-              <label>Number of teams</label>
-              <input
-                type="number"
-                min="1"
-                max={room.players.length}
-                value={teamCountInput}
-                onChange={(event) => regenerateTeams(event.target.value)}
-              />
-            </div>
-
-          </div>
-
           <p className="settings-summary">
             {room.settings.questionsPerPlayer} questions/player ·{' '}
             {room.settings.mode === 'finite' ? `${room.settings.rounds} round(s)` : 'Infinite rounds'} ·{' '}
@@ -1138,55 +1125,85 @@ function App() {
             Daily Double {room.settings.dailyDouble ? 'on' : 'off'}
           </p>
 
-          <div className="player-pool">
-            <h3>Players</h3>
-            {room.players.map((player) => {
-              const assignedTeam = teamConfig.find((team) => team.playerIds.includes(player.id));
-              return (
-                <div className="player-row" key={player.id}>
-                  <span>
-                    {player.name}
-                    {!player.isConnected ? ' (offline)' : ''}
-                  </span>
-                  <select value={assignedTeam?.id || ''} onChange={(event) => movePlayerTeam(player.id, event.target.value)}>
-                    {teamConfig.map((team) => (
-                      <option key={team.id} value={team.id}>
-                        {team.name}
-                      </option>
-                    ))}
-                  </select>
+          {isHost ? (
+            <>
+              <div className="inline-controls">
+                <div className="control-field">
+                  <label>Number of teams</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max={room.players.length}
+                    value={teamCountInput}
+                    onChange={(event) => regenerateTeams(event.target.value)}
+                  />
                 </div>
-              );
-            })}
-          </div>
-
-          <div className="teams-preview">
-            {teamConfig.map((team) => (
-              <div className="team-card" key={team.id}>
-                <input
-                  value={team.name}
-                  maxLength={NAME_MAX}
-                  onChange={(event) => {
-                    const nextName = event.target.value;
-                    setTeamConfig((current) =>
-                      current.map((entry) => (entry.id === team.id ? { ...entry, name: nextName } : entry))
-                    );
-                  }}
-                />
-                <div>{team.playerIds.length} player(s)</div>
               </div>
-            ))}
-          </div>
 
-          {startGameBlocker && <div className="field-error">{startGameBlocker}</div>}
-          {duplicateTeamNames.length > 0 && (
-            <div className="field-error warn">Duplicate team names: {duplicateTeamNames.join(', ')}</div>
-          )}
+              <div className="player-pool">
+                <h3>Players</h3>
+                {room.players.map((player) => {
+                  const assignedTeam = teamConfig.find((team) => team.playerIds.includes(player.id));
+                  return (
+                    <div className="player-row" key={player.id}>
+                      <span>
+                        {player.name}
+                        {!player.isConnected ? ' (offline)' : ''}
+                      </span>
+                      <select value={assignedTeam?.id || ''} onChange={(event) => movePlayerTeam(player.id, event.target.value)}>
+                        {teamConfig.map((team) => (
+                          <option key={team.id} value={team.id}>
+                            {team.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
 
-          {isHost && (
-            <button type="button" disabled={Boolean(busy) || Boolean(startGameBlocker)} onClick={startGame}>
-              {busy === 'start-game' ? 'Starting…' : 'Start Game'}
-            </button>
+              <div className="teams-preview">
+                {teamConfig.map((team) => (
+                  <div className="team-card" key={team.id}>
+                    <input
+                      value={team.name}
+                      maxLength={NAME_MAX}
+                      onChange={(event) => {
+                        const nextName = event.target.value;
+                        setTeamConfig((current) =>
+                          current.map((entry) => (entry.id === team.id ? { ...entry, name: nextName } : entry))
+                        );
+                      }}
+                    />
+                    <div>{team.playerIds.length} player(s)</div>
+                  </div>
+                ))}
+              </div>
+
+              {startGameBlocker && <div className="field-error">{startGameBlocker}</div>}
+              {duplicateTeamNames.length > 0 && (
+                <div className="field-error warn">Duplicate team names: {duplicateTeamNames.join(', ')}</div>
+              )}
+
+              <button type="button" disabled={Boolean(busy) || Boolean(startGameBlocker)} onClick={startGame}>
+                {busy === 'start-game' ? 'Starting…' : 'Start Game'}
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="player-pool">
+                <h3>Players</h3>
+                {room.players.map((player) => (
+                  <div className="player-row" key={player.id}>
+                    <span>
+                      {player.name}
+                      {!player.isConnected ? ' (offline)' : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <p className="pill">{hostName} is setting up teams…</p>
+            </>
           )}
         </section>
       )}

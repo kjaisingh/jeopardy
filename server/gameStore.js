@@ -741,6 +741,19 @@ export const gameStore = {
     return { code: room.code, wasHost };
   },
 
+  async leaveRoom(rawCode, playerId) {
+    const room = await ensureRoom(rawCode);
+    const player = room.players.get(playerId);
+    if (!player || !player.socketId) return null;
+
+    player.socketId = null;
+
+    const wasHost = player.id === room.hostPlayerId;
+    if (wasHost) room.hostDisconnectedAt = Date.now();
+
+    return { code: room.code, wasHost };
+  },
+
   async maybePromoteHost(rawCode) {
     const room = rooms.get(normalizeRoomCode(rawCode));
     if (!room) return false;

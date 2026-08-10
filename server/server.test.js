@@ -443,6 +443,35 @@ test('gameStore: promotion no-ops when nobody is connected, then fires on the ne
   assert.equal(reconnected.room.hostPlayerId, p1.playerId);
 });
 
+test('gameStore: leaveRoom marks a player disconnected and arms host promotion just like a socket disconnect', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-leave-host', DEFAULT_SETTINGS);
+  const p1 = await gameStore.joinRoom(host.code, 'P1', 'socket-leave-p1');
+
+  const leaveResult = await gameStore.leaveRoom(host.code, host.playerId);
+  assert.deepEqual(leaveResult, { code: host.code, wasHost: true });
+
+  const view = gameStore.roomViews(host.code).find((entry) => entry.socketId === 'socket-leave-p1');
+  assert.equal(view.room.players.find((player) => player.id === host.playerId).isConnected, false);
+
+  await new Promise((resolve) => setTimeout(resolve, gameStore.HOST_GRACE_MS + 10));
+  const promoted = await gameStore.maybePromoteHost(host.code);
+  assert.equal(promoted, true);
+
+  const promotedView = gameStore.roomViews(host.code).find((entry) => entry.socketId === 'socket-leave-p1');
+  assert.equal(promotedView.room.hostPlayerId, p1.playerId);
+});
+
+test('gameStore: leaveRoom is a no-op for an already-disconnected or unknown player', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-leave2-host', DEFAULT_SETTINGS);
+
+  gameStore.disconnect('socket-leave2-host');
+  const result = await gameStore.leaveRoom(host.code, host.playerId);
+  assert.equal(result, null);
+
+  const unknownResult = await gameStore.leaveRoom(host.code, 'not-a-real-player-id');
+  assert.equal(unknownResult, null);
+});
+
 // --- Duplicate-session supersede ------------------------------------------------
 
 test('gameStore: reconnecting with a live prior socket supersedes it; the old socket disconnect is a no-op', async () => {
