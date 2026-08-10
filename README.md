@@ -1,4 +1,6 @@
 # Jeopardy
+[![CI](https://github.com/kjaisingh/jeopardy/actions/workflows/ci.yml/badge.svg)](https://github.com/kjaisingh/jeopardy/actions/workflows/ci.yml)
+
 Welcome to a highly interactive, custom Jeopardy experience designed to make game nights, parties, and remote hangouts incredibly engaging. Unlike traditional trivia games where the questions are pre-written and static, this game relies entirely on the creativity of its players to build the ultimate challenge.
 
 
@@ -57,6 +59,13 @@ npm run dev
 ```bash
 http://localhost:5173
 ```
+
+
+## Tests
+```bash
+npm test
+```
+Runs the server's in-process Socket.IO test suite (`server/server.test.js`) against Node's built-in test runner. No Supabase connection is required — persistence is skipped automatically when the env vars are unset. This suite also runs on every push and pull request via [GitHub Actions](.github/workflows/ci.yml).
 
 
 ## Production Build
