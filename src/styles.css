@@ -295,10 +295,23 @@ button:disabled {
 }
 
 .team-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.team-columns {
   display: grid;
   grid-template-columns: 0.85fr 1.15fr;
   gap: 14px;
-  margin-top: 12px;
+  align-items: start;
+}
+
+.team-column {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
 .player-pool,
@@ -885,7 +898,7 @@ button.danger {
 }
 
 @media (max-width: 900px) {
-  .team-layout,
+  .team-columns,
   .board-top,
   .board-grid {
     grid-template-columns: 1fr;
