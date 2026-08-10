@@ -22,7 +22,7 @@ const byName = (left, right) => left.name.localeCompare(right.name);
 const valuesForCount = (count) => Array.from({ length: count }, (_, i) => (i + 1) * 100);
 
 const defaultSettings = () => ({
-  mode: 'finite',
+  mode: 'infinite',
   rounds: 1,
   dailyDouble: false,
   timerSeconds: 0,
@@ -575,6 +575,23 @@ export const gameStore = {
 
     await persistRoom(room);
     return publicRoom(room, hostPlayerId);
+  },
+
+  async kickPlayer(rawCode, hostPlayerId, targetPlayerId) {
+    const room = await ensureRoom(rawCode);
+    if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can remove players');
+    if (room.phase !== 'lobby') throw new Error('Players can only be removed during question submission');
+    if (targetPlayerId === hostPlayerId) throw new Error('Host cannot remove themselves');
+
+    const target = room.players.get(targetPlayerId);
+    if (!target) throw new Error('Player not found');
+
+    const kickedSocketId = target.socketId;
+    room.players.delete(targetPlayerId);
+    pushEvent(room, { type: 'player-kicked', playerName: target.name });
+
+    await persistRoom(room);
+    return { room: publicRoom(room, hostPlayerId), kickedSocketId };
   },
 
   async setTeamScore(rawCode, hostPlayerId, teamId, score) {

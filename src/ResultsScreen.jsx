@@ -129,17 +129,18 @@ export function ResultsScreen({
         {stats.unsolved.length > 0 && (
           <div className="stat-detail-block">
             <h3>Nobody Got These</h3>
-            <ul className="unsolved-list">
+            <div className="unsolved-list">
               {stats.unsolved.map((entry, index) => (
-                <li key={index}>
-                  <strong>
-                    {entry.ownerPlayerName} · {formatPoints(entry.value)}
-                  </strong>
-                  <div>{entry.prompt}</div>
+                <div className="unsolved-item" key={index}>
+                  <div className="unsolved-item-head">
+                    <span className="unsolved-item-owner">{entry.ownerPlayerName}</span>
+                    <span className="unsolved-item-value">{formatPoints(entry.value)}</span>
+                  </div>
+                  <div className="unsolved-item-prompt">{entry.prompt}</div>
                   <div className="unsolved-answer">Answer: {entry.answer}</div>
-                </li>
+                </div>
               ))}
-            </ul>
+            </div>
           </div>
         )}
 

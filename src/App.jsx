@@ -2,7 +2,11 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import QRCode from 'qrcode';
 import { ResultsScreen } from './ResultsScreen.jsx';
+import { HelpModal } from './components/HelpModal.jsx';
+import { FlashBanner } from './components/FlashBanner.jsx';
+import { QuestionOverlay } from './components/QuestionOverlay.jsx';
 import { useSound } from './useSound.js';
+import { teamById, tailSeq, toFlash, SOUND_BY_TYPE } from './flash.js';
 
 const valuesForCount = (count) => Array.from({ length: count }, (_, i) => (i + 1) * 100);
 const STORAGE_KEY = 'jeopardy-session';
@@ -10,7 +14,7 @@ const NAME_MAX = 24;
 const PROMPT_MAX = 300;
 const ANSWER_MAX = 120;
 const ATTEMPT_MAX = 200;
-const TIMER_OPTIONS = [0, 10, 15, 20, 30, 45, 60, 90, 120];
+const TIMER_OPTIONS = [0, 30, 60, 90, 120, 150, 180];
 
 const socketUrl =
   import.meta.env.VITE_SERVER_URL ||
@@ -73,79 +77,6 @@ const call = (event, payload) =>
     });
   });
 
-const teamById = (teams) => Object.fromEntries(teams.map((team) => [team.id, team]));
-
-const tailSeq = (events) => (events && events.length ? events[events.length - 1].seq : 0);
-
-const toFlash = (event, teamMap) => {
-  switch (event.type) {
-    case 'attempt-correct':
-    case 'override-correct':
-      return { tone: 'correct', headline: 'CORRECT!', detail: `${event.teamName} +$${event.points}`, holdMs: 1300 };
-    case 'attempt-incorrect':
-      return {
-        tone: 'incorrect',
-        headline: 'INCORRECT',
-        detail: `Passing to ${event.nextTeamName}`,
-        holdMs: 1300
-      };
-    case 'attempt-skipped':
-      return {
-        tone: 'incorrect',
-        headline: "CAN'T ANSWER",
-        detail: `Passing to ${event.nextTeamName}`,
-        holdMs: 1300
-      };
-    case 'question-passed':
-      return {
-        tone: 'incorrect',
-        headline: 'PASSED',
-        detail: `Answer: ${event.correctAnswer}`,
-        holdMs: 1800
-      };
-    case 'question-exhausted':
-      return {
-        tone: 'incorrect',
-        headline: 'NO ONE GOT IT',
-        detail: `Answer: ${event.correctAnswer}`,
-        holdMs: 1800
-      };
-    case 'daily-double': {
-      const teamName = teamMap[event.teamId]?.name || 'A team';
-      return {
-        tone: 'daily-double',
-        headline: 'DAILY DOUBLE!',
-        detail: `${teamName} · $${event.value} → $${event.value * event.multiplier}`,
-        holdMs: 2000
-      };
-    }
-    case 'host-changed':
-      return { tone: 'correct', headline: 'NEW HOST', detail: `${event.newHostName} is now the host`, holdMs: 1800 };
-    case 'settings-changed':
-      return {
-        tone: 'incorrect',
-        headline: 'SETTINGS CHANGED',
-        detail: 'Review and resubmit your questions',
-        holdMs: 2000
-      };
-    default:
-      return null;
-  }
-};
-
-const SOUND_BY_TYPE = {
-  'attempt-correct': 'correct',
-  'override-correct': 'correct',
-  'attempt-incorrect': 'incorrect',
-  'attempt-skipped': 'incorrect',
-  'question-passed': 'incorrect',
-  'question-exhausted': 'incorrect',
-  'daily-double': 'dailyDouble',
-  'game-over': 'gameOver',
-  'host-changed': 'select',
-  'settings-changed': 'incorrect'
-};
-
 function App() {
   const [session, setSession] = useState(() => {
     try {
@@ -182,7 +113,7 @@ function App() {
   const [questionsPerPlayerInput, setQuestionsPerPlayerInput] = useState('5');
   const [teamCountInput, setTeamCountInput] = useState('2');
   const [teamConfig, setTeamConfig] = useState([]);
-  const [roundMode, setRoundMode] = useState('finite');
+  const [roundMode, setRoundMode] = useState('infinite');
   const [roundCountInput, setRoundCountInput] = useState('1');
   const [dailyDoubleEnabled, setDailyDoubleEnabled] = useState(false);
   const [timerSecondsInput, setTimerSecondsInput] = useState('0');
@@ -202,6 +133,7 @@ function App() {
 
   const [superseded, setSuperseded] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState('');
+  const [helpOpen, setHelpOpen] = useState(false);
 
   const me = useMemo(() => room?.players.find((player) => player.id === session?.playerId) || null, [room, session]);
   const isHost = Boolean(room && session && room.hostPlayerId === session.playerId);
@@ -289,20 +221,18 @@ function App() {
     });
   }, [room?.events, flash, flashCursor, teamMap, play]);
 
-  // Flash lifecycle: hold, then a short exit fade, then gone.
+  // Flash lifecycle: banners stay up until manually dismissed, then a short exit fade.
   useEffect(() => {
-    if (!flash) return undefined;
-    if (flash.visible) {
-      const holdTimeout = window.setTimeout(() => {
-        setFlash((current) => (current?.id === flash.id ? { ...current, visible: false } : current));
-      }, flash.holdMs);
-      return () => window.clearTimeout(holdTimeout);
-    }
+    if (!flash || flash.visible) return undefined;
     const exitTimeout = window.setTimeout(() => {
       setFlash((current) => (current?.id === flash.id ? null : current));
     }, 200);
     return () => window.clearTimeout(exitTimeout);
   }, [flash]);
+
+  const dismissFlash = () => {
+    setFlash((current) => (current ? { ...current, visible: false } : current));
+  };
 
   // Kill a stale banner the instant a new question opens (before paint, so it never overlaps the new overlay).
   useLayoutEffect(() => {
@@ -331,14 +261,23 @@ function App() {
       if (!suppressAutoResumeRef.current && sessionRef.current) reconnectSession(sessionRef.current);
     };
     const onSuperseded = () => setSuperseded(true);
+    const onKicked = () => {
+      suppressAutoResumeRef.current = true;
+      resetToHome();
+      setSuppressAutoResume(false);
+      setSession(null);
+      setNotice('You were removed from the room by the host.');
+    };
     socket.on('room:updated', onRoom);
     socket.on('connect', onConnect);
     socket.on('session:superseded', onSuperseded);
+    socket.on('room:kicked', onKicked);
     if (socket.connected) onConnect();
     return () => {
       socket.off('room:updated', onRoom);
       socket.off('connect', onConnect);
       socket.off('session:superseded', onSuperseded);
+      socket.off('room:kicked', onKicked);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -447,7 +386,7 @@ function App() {
     setInvalidDraftIds(new Set());
     setTeamCountInput('2');
     setTeamConfig([]);
-    setRoundMode('finite');
+    setRoundMode('infinite');
     setRoundCountInput('1');
     setDailyDoubleEnabled(false);
     setTimerSecondsInput('0');
@@ -658,6 +597,11 @@ function App() {
   const passQuestion = () =>
     run('pass', () => call('question:pass', { code: room.code, playerId: session.playerId }));
 
+  const kickPlayer = (targetPlayerId, targetName) => {
+    if (!window.confirm(`Remove ${targetName} from the game?`)) return undefined;
+    return run('kick', () => call('player:kick', { code: room.code, playerId: session.playerId, targetPlayerId }));
+  };
+
   const restartGame = () =>
     run('restart', async () => {
       setDrafts(blankDraft(room.settings.questionsPerPlayer));
@@ -693,6 +637,8 @@ function App() {
 
   const canResume = Boolean(session?.code && session?.playerId && !room);
 
+  const helpFragment = helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />;
+
   if (superseded) {
     return (
       <div className="app">
@@ -717,7 +663,12 @@ function App() {
       <div className="app">
         <div className="home-screen">
           <div className="card home-card">
-            <h1>Jeopardy</h1>
+            <div className="home-title-row">
+              <h1>Jeopardy</h1>
+              <button type="button" className="help-trigger" aria-label="How to play" onClick={() => setHelpOpen(true)}>
+                ?
+              </button>
+            </div>
             <h2>Create a Game</h2>
             <input
               value={createName}
@@ -789,18 +740,20 @@ function App() {
 
           <div className="card home-card">
             <h2>Join a Game</h2>
-            <input
-              value={joinCode}
-              maxLength={6}
-              placeholder="Room code"
-              onChange={(event) => setJoinCode(event.target.value.toUpperCase())}
-            />
-            <input
-              value={joinName}
-              maxLength={NAME_MAX}
-              placeholder="Your name"
-              onChange={(event) => setJoinName(event.target.value)}
-            />
+            <div className="field-stack">
+              <input
+                value={joinCode}
+                maxLength={6}
+                placeholder="Room code"
+                onChange={(event) => setJoinCode(event.target.value.toUpperCase())}
+              />
+              <input
+                value={joinName}
+                maxLength={NAME_MAX}
+                placeholder="Your name"
+                onChange={(event) => setJoinName(event.target.value)}
+              />
+            </div>
             <button
               type="button"
               disabled={!joinCode.trim() || !joinName.trim() || Boolean(busy)}
@@ -824,20 +777,12 @@ function App() {
           )}
         </div>
         {error && <div className="error sticky">{error}</div>}
+        {helpFragment}
       </div>
     );
   }
 
   const hostName = hostPlayer?.name || 'the host';
-
-  const flashFragment = flash && (
-    <div className={`result-flash ${flash.tone}${flash.visible ? '' : ' leaving'}`}>
-      <div className="result-flash-text">
-        <div className="result-flash-headline">{flash.headline}</div>
-        {flash.detail && <div className="result-flash-detail">{flash.detail}</div>}
-      </div>
-    </div>
-  );
 
   if (room.phase === 'finished') {
     return (
@@ -856,8 +801,9 @@ function App() {
           onLeave={leaveCompletely}
         />
         {notice && <div className="pill notice">{notice}</div>}
-        {flashFragment}
+        <FlashBanner flash={flash} onDismiss={dismissFlash} />
         {error && <div className="error sticky">{error}</div>}
+        {helpFragment}
       </div>
     );
   }
@@ -921,6 +867,9 @@ function App() {
           </div>
         </div>
         <div className="topbar-actions">
+          <button type="button" className="help-trigger" aria-label="How to play" onClick={() => setHelpOpen(true)}>
+            ?
+          </button>
           {isHost && (
             <button type="button" className="secondary subtle" onClick={toggleMuted}>
               {muted ? 'Unmute' : 'Mute'}
@@ -930,7 +879,7 @@ function App() {
             Go Home
           </button>
           <button type="button" className="secondary danger subtle" onClick={leaveCompletely}>
-            Leave Completely
+            Leave
           </button>
         </div>
       </header>
@@ -951,6 +900,17 @@ function App() {
         <section className="card">
           <h2>Question Submission</h2>
           <p>Each player writes {room.settings.questionsPerPlayer} questions, one per point value.</p>
+
+          {me?.submitted && !editingQuestions && (
+            <div className="lobby-ready">
+              <div className="pill success">
+                Questions submitted. {isHost ? 'Waiting for everyone else.' : 'Waiting for the host.'}
+              </div>
+              <button type="button" className="secondary subtle" onClick={() => setEditingQuestions(true)}>
+                Edit My Questions
+              </button>
+            </div>
+          )}
 
           {isHost && (
             <div className="settings-editor">
@@ -1038,7 +998,7 @@ function App() {
             </div>
           )}
 
-          {!me?.submitted || editingQuestions ? (
+          {(!me?.submitted || editingQuestions) && (
             <>
               <div className="question-grid">
                 {drafts.map((draft) => (
@@ -1085,15 +1045,6 @@ function App() {
                 {busy === 'submit-questions' ? 'Submitting…' : 'Submit My Questions'}
               </button>
             </>
-          ) : (
-            <div className="lobby-ready">
-              <div className="pill success">
-                Questions submitted. {isHost ? 'Waiting for everyone else.' : 'Waiting for the host.'}
-              </div>
-              <button type="button" className="secondary subtle" onClick={() => setEditingQuestions(true)}>
-                Edit My Questions
-              </button>
-            </div>
           )}
 
           <div className="players-list">
@@ -1101,6 +1052,18 @@ function App() {
               <div key={player.id} className={`pill ${player.submitted ? 'success' : ''}${!player.isConnected ? ' offline' : ''}`}>
                 {player.name} - {player.submitted ? 'Ready' : 'Editing'}
                 {!player.isConnected ? ' (offline)' : ''}
+                {isHost && player.id !== session.playerId && (
+                  <button
+                    type="button"
+                    className="pill-kick"
+                    disabled={Boolean(busy)}
+                    onClick={() => kickPlayer(player.id, player.name)}
+                    aria-label={`Remove ${player.name}`}
+                    title={`Remove ${player.name}`}
+                  >
+                    ×
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -1249,71 +1212,30 @@ function App() {
       )}
 
       {activeQuestion && room.phase === 'playing' && (
-        <div className="question-overlay">
-          <div className={`question-overlay-card${isDailyDouble ? ' daily-double' : ''}`}>
-            {isDailyDouble && <div className="pill daily-double-pill">DAILY DOUBLE ×{activeQuestion.multiplier}</div>}
-            <div className="active-meta">
-              <span>
-                {activeQuestion.ownerPlayerName} -{' '}
-                {isDailyDouble
-                  ? `$${activeQuestion.value} → $${activeQuestion.value * activeQuestion.multiplier}`
-                  : `$${activeQuestion.value}`}
-              </span>
-              <span>Answering team: {teamMap[activeQuestion.currentTeamId]?.name || '-'}</span>
-            </div>
-
-            <h2 className="question-prompt">{activeQuestion.prompt}</h2>
-
-            {isHost && (
-              <>
-                {room.settings.timerSeconds > 0 && deadline && (
-                  <div className="timer-block">
-                    <div className={`timer-track${timerPct < 20 ? ' danger' : timerPct < 50 ? ' warn' : ''}`}>
-                      <div className="timer-bar" style={{ width: `${timerPct}%` }} />
-                    </div>
-                    <div className="timer-count">{timerSecondsLeft}s</div>
-                  </div>
-                )}
-
-                <form
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    if (!activeAnswerInput.trim() || busy) return;
-                    submitAttempt();
-                  }}
-                >
-                  <input
-                    value={activeAnswerInput}
-                    maxLength={ATTEMPT_MAX}
-                    placeholder="Type team answer"
-                    autoFocus
-                    onChange={(event) => setActiveAnswerInput(event.target.value)}
-                  />
-                  <div className="actions">
-                    <button type="submit" disabled={!activeAnswerInput.trim() || Boolean(busy)}>
-                      {busy === 'attempt' ? 'Submitting…' : 'Submit Attempt'}
-                    </button>
-                    <button type="button" className="secondary" disabled={Boolean(busy)} onClick={skipTeam}>
-                      Can't Answer
-                    </button>
-                    {room.lastWrongAttempt && (
-                      <button type="button" className="secondary" disabled={Boolean(busy)} onClick={overrideIncorrect}>
-                        Override Last Incorrect
-                      </button>
-                    )}
-                    <button type="button" className="secondary" disabled={Boolean(busy)} onClick={passQuestion}>
-                      Pass Question
-                    </button>
-                  </div>
-                </form>
-              </>
-            )}
-          </div>
-        </div>
+        <QuestionOverlay
+          activeQuestion={activeQuestion}
+          isDailyDouble={isDailyDouble}
+          teamMap={teamMap}
+          isHost={isHost}
+          timerSeconds={room.settings.timerSeconds}
+          deadline={deadline}
+          timerPct={timerPct}
+          timerSecondsLeft={timerSecondsLeft}
+          activeAnswerInput={activeAnswerInput}
+          onAnswerInputChange={setActiveAnswerInput}
+          onSubmitAttempt={submitAttempt}
+          onOverrideIncorrect={overrideIncorrect}
+          onPassQuestion={passQuestion}
+          onSkipTeam={skipTeam}
+          lastWrongAttempt={room.lastWrongAttempt}
+          busy={busy}
+          answerMax={ATTEMPT_MAX}
+        />
       )}
 
-      {flashFragment}
+      <FlashBanner flash={flash} onDismiss={dismissFlash} />
       {error && <div className="error sticky">{error}</div>}
+      {helpFragment}
     </div>
   );
 }

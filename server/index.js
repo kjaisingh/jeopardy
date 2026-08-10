@@ -184,6 +184,19 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('player:kick', async ({ code, playerId, targetPlayerId } = {}, ack = () => {}) => {
+    try {
+      const { room, kickedSocketId } = await gameStore.kickPlayer(code, playerId, targetPlayerId);
+      ack({ ok: true });
+      if (kickedSocketId) {
+        io.to(kickedSocketId).emit('room:kicked');
+      }
+      sendRoom(room.code);
+    } catch (error) {
+      ack({ ok: false, message: error.message });
+    }
+  });
+
   socket.on('room:leave', async ({ code, playerId } = {}, ack = () => {}) => {
     try {
       const result = await gameStore.leaveRoom(code, playerId);

@@ -158,6 +158,47 @@ test('gameStore: restartGame is gated to the finished phase', async () => {
   await assert.rejects(() => gameStore.restartGame(code, hostPlayerId), /Game is not finished yet/);
 });
 
+// --- gameStore: kickPlayer -------------------------------------------------------
+
+test('gameStore: host kicks a player during the lobby phase', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-kick-host', DEFAULT_SETTINGS);
+  const joined = await gameStore.joinRoom(host.code, 'Target', 'socket-kick-target');
+
+  const { room } = await gameStore.kickPlayer(host.code, host.playerId, joined.playerId);
+
+  assert.equal(room.players.some((player) => player.id === joined.playerId), false);
+  assert.equal(room.events.at(-1).type, 'player-kicked');
+  assert.equal(room.events.at(-1).playerName, 'Target');
+});
+
+test('gameStore: a non-host cannot kick a player', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-kick-nonhost', DEFAULT_SETTINGS);
+  const joined = await gameStore.joinRoom(host.code, 'Target', 'socket-kick-nonhost-target');
+
+  await assert.rejects(
+    () => gameStore.kickPlayer(host.code, joined.playerId, host.playerId),
+    /Only host can remove players/
+  );
+});
+
+test('gameStore: kickPlayer is gated to the lobby phase', async () => {
+  const { code, hostPlayerId, players } = await setupGame({ playerCount: 2 });
+  const target = players.find((player) => player.id !== hostPlayerId);
+
+  await assert.rejects(
+    () => gameStore.kickPlayer(code, hostPlayerId, target.id),
+    /Players can only be removed during question submission/
+  );
+});
+
+test('gameStore: host cannot kick themselves', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-kick-self', DEFAULT_SETTINGS);
+  await assert.rejects(
+    () => gameStore.kickPlayer(host.code, host.playerId, host.playerId),
+    /Host cannot remove themselves/
+  );
+});
+
 // --- gameStore: attempts, events, and history -----------------------------------
 
 test('gameStore: a correct answer closes the question, awards points, and pushes one event', async () => {
