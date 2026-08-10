@@ -563,12 +563,6 @@ button:disabled {
   text-shadow: none;
 }
 
-.result-flash.game-over .result-flash-text {
-  color: #f6f8ff;
-  background: linear-gradient(180deg, #2f66f5, #1c3fae);
-  border-color: #a9c0ff;
-}
-
 @keyframes flash-in {
   from {
     transform: scale(0.9);

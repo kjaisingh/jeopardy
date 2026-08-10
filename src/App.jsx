@@ -119,8 +119,6 @@ const toFlash = (event, teamMap) => {
         holdMs: 2000
       };
     }
-    case 'game-over':
-      return { tone: 'game-over', headline: 'GAME OVER', detail: '', holdMs: 1500 };
     case 'host-changed':
       return { tone: 'correct', headline: 'NEW HOST', detail: `${event.newHostName} is now the host`, holdMs: 1800 };
     case 'settings-changed':
@@ -263,14 +261,15 @@ function App() {
       setFlashCursor(tail);
       return;
     }
-    // Game-over always preempts whatever's showing, so the last question's banner never bleeds into Results.
+    // Game-over always preempts whatever's showing, so the last question's banner never bleeds into
+    // Results. It clears any stale banner but shows none of its own — the Results screen's hero
+    // heading already announces the winner, and a floating banner would just cover it.
     const gameOver = events.find((event) => event.seq > flashCursor && event.type === 'game-over');
     if (gameOver) {
       setFlashCursor(gameOver.seq);
-      const mapped = toFlash(gameOver, teamMap);
       const soundName = SOUND_BY_TYPE[gameOver.type];
       if (soundName) play(soundName);
-      setFlash({ id: gameOver.seq, ...mapped, questionKey: null, visible: true });
+      setFlash(null);
       return;
     }
     if (flash) return;
