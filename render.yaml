@@ -4,10 +4,14 @@ services:
     env: node
     plan: free
     autoDeploy: true
-    buildCommand: npm install && npm run build
+    buildCommand: npm ci && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_VERSION
         value: 20
       - key: CLIENT_URL
         value: https://jeopardy-ss6k.onrender.com
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

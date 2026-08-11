@@ -13,11 +13,13 @@ const app = express();
 const httpServer = createServer(app);
 const persistenceWarning = gameStore.persistenceConfigError();
 
-app.use(
-  cors({
-    origin: process.env.CLIENT_URL || true
-  })
-);
+const allowedOrigins = [process.env.CLIENT_URL, 'http://localhost:5173'].filter(Boolean);
+const corsOrigin = (origin, callback) => {
+  if (!origin || allowedOrigins.includes(origin)) callback(null, true);
+  else callback(new Error('Not allowed by CORS'));
+};
+
+app.use(cors({ origin: corsOrigin }));
 app.use(express.json());
 
 app.get('/health', (_req, res) => {
@@ -29,7 +31,7 @@ app.get('/health', (_req, res) => {
 
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.CLIENT_URL || true,
+    origin: corsOrigin,
     credentials: true
   }
 });
