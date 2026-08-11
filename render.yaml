@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: jeopardy
+    name: Jeopardy
     env: node
     plan: free
     autoDeploy: true
