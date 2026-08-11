@@ -5,16 +5,17 @@ import { ResultsScreen } from './ResultsScreen.jsx';
 import { HelpModal } from './components/HelpModal.jsx';
 import { FlashBanner } from './components/FlashBanner.jsx';
 import { QuestionOverlay } from './components/QuestionOverlay.jsx';
+import { TopBar } from './components/TopBar.jsx';
+import { SupersededScreen } from './components/SupersededScreen.jsx';
+import { HomeScreen } from './components/HomeScreen.jsx';
+import { LobbyScreen } from './components/LobbyScreen.jsx';
+import { TeamSetupScreen } from './components/TeamSetupScreen.jsx';
+import { BoardScreen } from './components/BoardScreen.jsx';
 import { useSound } from './useSound.js';
 import { teamById, tailSeq, toFlash, SOUND_BY_TYPE } from './flash.js';
+import { PROMPT_MAX, ANSWER_MAX, ATTEMPT_MAX, valuesForCount } from './constants.js';
 
-const valuesForCount = (count) => Array.from({ length: count }, (_, i) => (i + 1) * 100);
 const STORAGE_KEY = 'jeopardy-session';
-const NAME_MAX = 24;
-const PROMPT_MAX = 300;
-const ANSWER_MAX = 120;
-const ATTEMPT_MAX = 200;
-const TIMER_OPTIONS = [0, 30, 60, 90, 120, 150, 180];
 
 const socketUrl =
   import.meta.env.VITE_SERVER_URL ||
@@ -175,7 +176,6 @@ function App() {
   const [flashCursor, setFlashCursor] = useState(null);
 
   const [deadline, setDeadline] = useState(null);
-  const [now, setNow] = useState(() => Date.now());
 
   const [superseded, setSuperseded] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState('');
@@ -395,21 +395,18 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attemptKey, isHost, room?.settings?.timerSeconds]);
 
+  // Fire once at the exact expiry moment instead of polling — the countdown
+  // display itself now lives (and ticks) entirely inside QuestionOverlay.
   useEffect(() => {
-    if (!deadline) return undefined;
-    const interval = window.setInterval(() => setNow(Date.now()), 100);
-    return () => window.clearInterval(interval);
-  }, [deadline]);
-
-  useEffect(() => {
-    if (!deadline || !activeQuestion) return;
-    if (now >= deadline) {
+    if (!deadline || !activeQuestion) return undefined;
+    const timeout = window.setTimeout(() => {
       setDeadline(null);
       play('timeUp');
       skipTeam();
-    }
+    }, Math.max(0, deadline - Date.now()));
+    return () => window.clearTimeout(timeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [now, deadline, activeQuestion]);
+  }, [deadline, activeQuestion]);
 
   useEffect(() => {
     const count = room?.settings?.questionsPerPlayer;
@@ -555,6 +552,8 @@ function App() {
     }
     setSettingsEditMode((current) => !current);
   };
+
+  const updateSettingsDraft = (key, value) => setSettingsDraft((current) => ({ ...current, [key]: value }));
 
   const saveSettings = () =>
     run('save-settings', async () => {
@@ -706,18 +705,7 @@ function App() {
     return (
       <div className="app">
         {connectionFragment}
-        <div className="home-screen">
-          <div className="card home-card">
-            <h1>Jeopardy</h1>
-            <p>This game is now open on another device.</p>
-            <button type="button" disabled={Boolean(busy)} onClick={useHere}>
-              {busy === 'use-here' ? 'Reclaiming…' : 'Use Here'}
-            </button>
-            <button type="button" className="subtle" onClick={leaveCompletely}>
-              Leave Game
-            </button>
-          </div>
-        </div>
+        <SupersededScreen busy={busy} onUseHere={useHere} onLeave={leaveCompletely} />
       </div>
     );
   }
@@ -726,124 +714,32 @@ function App() {
     return (
       <div className="app">
         {connectionFragment}
-        <div className="home-screen">
-          <div className="card home-card">
-            <div className="home-title-row">
-              <h1>Jeopardy</h1>
-              <button type="button" className="help-trigger" aria-label="How to play" onClick={() => setHelpOpen(true)}>
-                ?
-              </button>
-            </div>
-            <h2>Create a Game</h2>
-            <input
-              value={createName}
-              maxLength={NAME_MAX}
-              placeholder="Your name"
-              aria-label="Your name"
-              onChange={(event) => setCreateName(event.target.value)}
-            />
-
-            <div className="inline-controls">
-              <div className="control-field">
-                <label>Questions per player</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="10"
-                  value={questionsPerPlayerInput}
-                  onChange={(event) => setQuestionsPerPlayerInput(event.target.value)}
-                />
-              </div>
-
-              <div className="control-field">
-                <label>Round mode</label>
-                <select value={roundMode} onChange={(event) => setRoundMode(event.target.value)}>
-                  <option value="finite">Finite</option>
-                  <option value="infinite">Infinite</option>
-                </select>
-              </div>
-
-              {roundMode === 'finite' && (
-                <div className="control-field">
-                  <label>Rounds per team</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="10"
-                    value={roundCountInput}
-                    onChange={(event) => setRoundCountInput(event.target.value)}
-                  />
-                </div>
-              )}
-
-              <div className="control-field">
-                <label>Answer timer</label>
-                <select value={timerSecondsInput} onChange={(event) => setTimerSecondsInput(event.target.value)}>
-                  {TIMER_OPTIONS.map((seconds) => (
-                    <option key={seconds} value={seconds}>
-                      {seconds === 0 ? 'Off' : `${seconds}s`}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="control-field checkbox-field">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={dailyDoubleEnabled}
-                    onChange={(event) => setDailyDoubleEnabled(event.target.checked)}
-                  />
-                  Enable Daily Double
-                </label>
-              </div>
-            </div>
-
-            <button type="button" disabled={!createName.trim() || Boolean(busy)} onClick={createRoom}>
-              {busy === 'create' ? 'Creating…' : 'Create Game'}
-            </button>
-          </div>
-
-          <div className="card home-card">
-            <h2>Join a Game</h2>
-            <div className="field-stack">
-              <input
-                value={joinCode}
-                maxLength={6}
-                placeholder="Room code"
-                aria-label="Room code"
-                onChange={(event) => setJoinCode(event.target.value.toUpperCase())}
-              />
-              <input
-                value={joinName}
-                maxLength={NAME_MAX}
-                placeholder="Your name"
-                aria-label="Your name"
-                onChange={(event) => setJoinName(event.target.value)}
-              />
-            </div>
-            <button
-              type="button"
-              disabled={!joinCode.trim() || !joinName.trim() || Boolean(busy)}
-              onClick={joinRoom}
-            >
-              {busy === 'join' ? 'Joining…' : 'Join Game'}
-            </button>
-          </div>
-
-          {canResume && (
-            <div className="card home-card">
-              <h2>Resume</h2>
-              <p>Room {session.code}</p>
-              <button type="button" disabled={Boolean(busy)} onClick={resumePreviousGame}>
-                Resume Previous Game
-              </button>
-              <button type="button" className="subtle" disabled={Boolean(busy)} onClick={leaveCompletely}>
-                Forget Saved Session
-              </button>
-            </div>
-          )}
-        </div>
+        <HomeScreen
+          onHelpOpen={() => setHelpOpen(true)}
+          createName={createName}
+          onCreateNameChange={setCreateName}
+          questionsPerPlayer={questionsPerPlayerInput}
+          onQuestionsPerPlayerChange={setQuestionsPerPlayerInput}
+          roundMode={roundMode}
+          onRoundModeChange={setRoundMode}
+          roundCount={roundCountInput}
+          onRoundCountChange={setRoundCountInput}
+          timerSeconds={timerSecondsInput}
+          onTimerSecondsChange={setTimerSecondsInput}
+          dailyDouble={dailyDoubleEnabled}
+          onDailyDoubleChange={setDailyDoubleEnabled}
+          busy={busy}
+          onCreateRoom={createRoom}
+          joinCode={joinCode}
+          onJoinCodeChange={setJoinCode}
+          joinName={joinName}
+          onJoinNameChange={setJoinName}
+          onJoinRoom={joinRoom}
+          canResume={canResume}
+          session={session}
+          onResumePreviousGame={resumePreviousGame}
+          onLeaveCompletely={leaveCompletely}
+        />
         {error && <div className="error sticky" role="alert">{error}</div>}
         {helpFragment}
       </div>
@@ -903,384 +799,80 @@ function App() {
     </div>
   );
 
-  const timerTotalMs = (room.settings?.timerSeconds || 0) * 1000;
-  const timerRemainingMs = deadline ? Math.max(0, deadline - now) : 0;
-  const timerPct = timerTotalMs ? (timerRemainingMs / timerTotalMs) * 100 : 0;
-  const timerSecondsLeft = Math.ceil(timerRemainingMs / 1000);
-
   return (
     <div className="app">
       {connectionFragment}
-      <header className="topbar card">
-        <div>
-          <div className="label">Room code</div>
-          <div className="room-code-row">
-            <div className="room-code code-block">{room.code}</div>
-            {typeof navigator !== 'undefined' && navigator.clipboard && (
-              <>
-                <button type="button" className="subtle" onClick={copyRoomCode}>
-                  Copy
-                </button>
-                <button type="button" className="subtle" onClick={copyShareLink}>
-                  Copy Link
-                </button>
-              </>
-            )}
-          </div>
-          {!hostPlayer?.isConnected && (
-            <div className="pill offline">Host disconnected, promoting a new host shortly</div>
-          )}
-        </div>
-        <div>
-          <div className="label">You</div>
-          <div>
-            {me?.name} {isHost ? '(Host)' : ''}
-          </div>
-        </div>
-        <div className="topbar-actions">
-          <button type="button" className="help-trigger" aria-label="How to play" onClick={() => setHelpOpen(true)}>
-            ?
-          </button>
-          {isHost && (
-            <button type="button" className="secondary subtle" onClick={toggleMuted}>
-              {muted ? 'Unmute' : 'Mute'}
-            </button>
-          )}
-          <button type="button" className="secondary" onClick={resetToHome}>
-            Go Home
-          </button>
-          <button type="button" className="secondary danger subtle" onClick={leaveCompletely}>
-            Leave
-          </button>
-        </div>
-      </header>
+      <TopBar
+        room={room}
+        hostPlayer={hostPlayer}
+        me={me}
+        isHost={isHost}
+        muted={muted}
+        onHelpOpen={() => setHelpOpen(true)}
+        onToggleMuted={toggleMuted}
+        onGoHome={resetToHome}
+        onLeave={leaveCompletely}
+        onCopyRoomCode={copyRoomCode}
+        onCopyShareLink={copyShareLink}
+      />
 
       {notice && <div className="pill notice" role="status">{notice}</div>}
 
-      {room.phase === 'lobby' && isHost && qrDataUrl && (
-        <section className="card invite-card">
-          <div>
-            <h2>Invite Players</h2>
-            <p>Scan to join, or use Copy Link above.</p>
-          </div>
-          <img src={qrDataUrl} alt="QR code to join game" className="qr-code" />
-        </section>
-      )}
-
       {room.phase === 'lobby' && (
-        <section className="card">
-          <h2>Question Submission</h2>
-          <p>Each player writes {room.settings.questionsPerPlayer} questions, one per point value.</p>
-
-          {me?.submitted && !editingQuestions && (
-            <div className="lobby-ready">
-              <div className="pill success">
-                Questions submitted. {isHost ? 'Waiting for everyone else.' : 'Waiting for the host.'}
-              </div>
-              <button type="button" className="secondary subtle" onClick={() => setEditingQuestions(true)}>
-                Edit My Questions
-              </button>
-            </div>
-          )}
-
-          {isHost && (
-            <div className="settings-editor">
-              {settingsEditMode ? (
-                <>
-                  <div className="inline-controls">
-                    <div className="control-field">
-                      <label>Questions per player</label>
-                      <input
-                        type="number"
-                        min="1"
-                        max="10"
-                        value={settingsDraft.questionsPerPlayer}
-                        onChange={(event) =>
-                          setSettingsDraft((current) => ({ ...current, questionsPerPlayer: event.target.value }))
-                        }
-                      />
-                    </div>
-
-                    <div className="control-field">
-                      <label>Round mode</label>
-                      <select
-                        value={settingsDraft.mode}
-                        onChange={(event) => setSettingsDraft((current) => ({ ...current, mode: event.target.value }))}
-                      >
-                        <option value="finite">Finite</option>
-                        <option value="infinite">Infinite</option>
-                      </select>
-                    </div>
-
-                    {settingsDraft.mode === 'finite' && (
-                      <div className="control-field">
-                        <label>Rounds per team</label>
-                        <input
-                          type="number"
-                          min="1"
-                          max="10"
-                          value={settingsDraft.rounds}
-                          onChange={(event) => setSettingsDraft((current) => ({ ...current, rounds: event.target.value }))}
-                        />
-                      </div>
-                    )}
-
-                    <div className="control-field">
-                      <label>Answer timer</label>
-                      <select
-                        value={settingsDraft.timerSeconds}
-                        onChange={(event) =>
-                          setSettingsDraft((current) => ({ ...current, timerSeconds: event.target.value }))
-                        }
-                      >
-                        {TIMER_OPTIONS.map((seconds) => (
-                          <option key={seconds} value={seconds}>
-                            {seconds === 0 ? 'Off' : `${seconds}s`}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div className="control-field checkbox-field">
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={settingsDraft.dailyDouble}
-                          onChange={(event) =>
-                            setSettingsDraft((current) => ({ ...current, dailyDouble: event.target.checked }))
-                          }
-                        />
-                        Enable Daily Double
-                      </label>
-                    </div>
-                  </div>
-                  <button type="button" disabled={Boolean(busy)} onClick={saveSettings}>
-                    {busy === 'save-settings' ? 'Saving…' : 'Save Settings'}
-                  </button>
-                  <button type="button" className="subtle" onClick={toggleSettingsEdit}>
-                    Cancel
-                  </button>
-                </>
-              ) : (
-                <button type="button" className="subtle" onClick={toggleSettingsEdit}>
-                  Edit Settings
-                </button>
-              )}
-            </div>
-          )}
-
-          {(!me?.submitted || editingQuestions) && (
-            <>
-              <div className="question-grid">
-                {drafts.map((draft) => (
-                  <div key={draft.localId} className={`question-card${invalidDraftIds.has(draft.localId) ? ' invalid' : ''}`}>
-                    <div className="question-head">
-                      <label>Value</label>
-                      <select value={draft.value} onChange={(event) => updateDraftValue(draft.localId, event.target.value)}>
-                        {valuesForCount(room.settings.questionsPerPlayer).map((value) => (
-                          <option key={value} value={value}>
-                            ${value}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <label>Question</label>
-                    <textarea
-                      rows={3}
-                      maxLength={PROMPT_MAX}
-                      value={draft.prompt}
-                      placeholder="Write the clue/question"
-                      onChange={(event) => updateDraft(draft.localId, 'prompt', event.target.value)}
-                    />
-                    {draft.prompt.length >= PROMPT_MAX * 0.8 && (
-                      <div className={`char-count${draft.prompt.length >= PROMPT_MAX ? ' danger' : ''}`}>
-                        {draft.prompt.length}/{PROMPT_MAX}
-                      </div>
-                    )}
-                    <label>Answer</label>
-                    <input
-                      maxLength={ANSWER_MAX}
-                      value={draft.answer}
-                      placeholder="Expected answer"
-                      onChange={(event) => updateDraft(draft.localId, 'answer', event.target.value)}
-                    />
-                    {draft.answer.length >= ANSWER_MAX * 0.8 && (
-                      <div className={`char-count${draft.answer.length >= ANSWER_MAX ? ' danger' : ''}`}>
-                        {draft.answer.length}/{ANSWER_MAX}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <button type="button" disabled={Boolean(busy)} onClick={submitQuestions}>
-                {busy === 'submit-questions' ? 'Submitting…' : 'Submit My Questions'}
-              </button>
-            </>
-          )}
-
-          <div className="players-list">
-            {room.players.map((player) => (
-              <div key={player.id} className={`pill ${player.submitted ? 'success' : ''}${!player.isConnected ? ' offline' : ''}`}>
-                {player.name} · {player.submitted ? 'Ready' : 'Editing'}
-                {!player.isConnected ? ' (offline)' : ''}
-                {isHost && player.id !== session.playerId && (
-                  <button
-                    type="button"
-                    className="pill-kick"
-                    disabled={Boolean(busy)}
-                    onClick={() => kickPlayer(player.id, player.name)}
-                    aria-label={`Remove ${player.name}`}
-                    title={`Remove ${player.name}`}
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {isHost && (
-            <button type="button" disabled={!allSubmitted || Boolean(busy)} onClick={continueToTeamSetup}>
-              {busy === 'continue' ? 'Continuing…' : 'Continue to Team Setup'}
-            </button>
-          )}
-        </section>
+        <LobbyScreen
+          room={room}
+          isHost={isHost}
+          session={session}
+          qrDataUrl={qrDataUrl}
+          me={me}
+          editingQuestions={editingQuestions}
+          onEditQuestions={setEditingQuestions}
+          settingsEditMode={settingsEditMode}
+          settingsDraft={settingsDraft}
+          onSettingsDraftChange={updateSettingsDraft}
+          onToggleSettingsEdit={toggleSettingsEdit}
+          onSaveSettings={saveSettings}
+          busy={busy}
+          drafts={drafts}
+          invalidDraftIds={invalidDraftIds}
+          onUpdateDraft={updateDraft}
+          onUpdateDraftValue={updateDraftValue}
+          onSubmitQuestions={submitQuestions}
+          onKickPlayer={kickPlayer}
+          allSubmitted={allSubmitted}
+          onContinueToTeamSetup={continueToTeamSetup}
+        />
       )}
 
       {room.phase === 'team-setup' && (
-        <section className="card team-layout">
-          <h2>Team Setup</h2>
-
-          <p className="settings-summary">
-            {room.settings.questionsPerPlayer} questions/player ·{' '}
-            {room.settings.mode === 'finite' ? `${room.settings.rounds} round(s)` : 'Infinite rounds'} ·{' '}
-            Timer {room.settings.timerSeconds > 0 ? `${room.settings.timerSeconds}s` : 'off'} ·{' '}
-            Daily Double {room.settings.dailyDouble ? 'on' : 'off'}
-          </p>
-
-          {isHost ? (
-            <div className="team-columns">
-              <div className="team-column">
-                <div className="inline-controls">
-                  <div className="control-field">
-                    <label>Number of teams</label>
-                    <input
-                      type="number"
-                      min="1"
-                      max={room.players.length}
-                      value={teamCountInput}
-                      onChange={(event) => regenerateTeams(event.target.value)}
-                    />
-                  </div>
-                </div>
-
-                <div className="player-pool">
-                  <h3>Players</h3>
-                  {room.players.map((player) => {
-                    const assignedTeam = teamConfig.find((team) => team.playerIds.includes(player.id));
-                    return (
-                      <div className="player-row" key={player.id}>
-                        <span>
-                          {player.name}
-                          {!player.isConnected ? ' (offline)' : ''}
-                        </span>
-                        <select value={assignedTeam?.id || ''} onChange={(event) => movePlayerTeam(player.id, event.target.value)}>
-                          {teamConfig.map((team) => (
-                            <option key={team.id} value={team.id}>
-                              {team.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="team-column">
-                <div className="teams-preview">
-                  {teamConfig.map((team) => (
-                    <div className="team-card" key={team.id}>
-                      <input
-                        value={team.name}
-                        maxLength={NAME_MAX}
-                        aria-label="Team name"
-                        onChange={(event) => {
-                          const nextName = event.target.value;
-                          setTeamConfig((current) =>
-                            current.map((entry) => (entry.id === team.id ? { ...entry, name: nextName } : entry))
-                          );
-                        }}
-                      />
-                      <div>{team.playerIds.length} player(s)</div>
-                    </div>
-                  ))}
-                </div>
-
-                {startGameBlocker && <div className="field-error">{startGameBlocker}</div>}
-                {duplicateTeamNames.length > 0 && (
-                  <div className="field-error warn">Duplicate team names: {duplicateTeamNames.join(', ')}</div>
-                )}
-
-                <button type="button" disabled={Boolean(busy) || Boolean(startGameBlocker)} onClick={startGame}>
-                  {busy === 'start-game' ? 'Starting…' : 'Start Game'}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <>
-              <div className="player-pool">
-                <h3>Players</h3>
-                {room.players.map((player) => (
-                  <div className="player-row" key={player.id}>
-                    <span>
-                      {player.name}
-                      {!player.isConnected ? ' (offline)' : ''}
-                    </span>
-                  </div>
-                ))}
-              </div>
-              <p className="pill">{hostName} is setting up teams…</p>
-            </>
-          )}
-        </section>
+        <TeamSetupScreen
+          room={room}
+          isHost={isHost}
+          hostName={hostName}
+          teamCountInput={teamCountInput}
+          onRegenerateTeams={regenerateTeams}
+          teamConfig={teamConfig}
+          onTeamConfigChange={setTeamConfig}
+          onMovePlayerTeam={movePlayerTeam}
+          startGameBlocker={startGameBlocker}
+          duplicateTeamNames={duplicateTeamNames}
+          busy={busy}
+          onStartGame={startGame}
+        />
       )}
 
       {room.phase === 'playing' && (
-        <section className="card">
-          <div className="board-top">
-            <h2>Board</h2>
-            <div>{currentTeam ? `${currentTeam.name}'s turn to pick` : ''}</div>
-            {isHost && (
-              <button type="button" className="subtle" onClick={() => setScoreEditMode((current) => !current)}>
-                {scoreEditMode ? 'Done Editing Scores' : 'Edit Scores'}
-              </button>
-            )}
-          </div>
-
-          <div className="score-row">{room.teams.map((team) => renderScoreCard(team, true))}</div>
-
-          <div className="board-grid">
-            {room.board.columns.map((column) => (
-              <div key={column.playerId} className="board-column">
-                <div className="board-header">{column.playerName}</div>
-                {column.cells.map((cell) => (
-                  <button
-                    type="button"
-                    key={`${column.playerId}-${cell.value}`}
-                    className={`board-cell ${cell.status}${
-                      cell.multiplier > 1 && cell.status !== 'open' ? ' daily-double-cell' : ''
-                    }`}
-                    disabled={!isHost || room.phase !== 'playing' || cell.status !== 'open' || Boolean(activeQuestion) || Boolean(busy)}
-                    onClick={() => selectQuestion(column.playerId, cell.value)}
-                  >
-                    {cell.status === 'open' ? `$${cell.value}` : ''}
-                  </button>
-                ))}
-              </div>
-            ))}
-          </div>
-        </section>
+        <BoardScreen
+          room={room}
+          currentTeam={currentTeam}
+          isHost={isHost}
+          scoreEditMode={scoreEditMode}
+          onToggleScoreEdit={() => setScoreEditMode((current) => !current)}
+          renderScoreCard={renderScoreCard}
+          activeQuestion={activeQuestion}
+          busy={busy}
+          onSelectQuestion={selectQuestion}
+        />
       )}
 
       {activeQuestion && room.phase === 'playing' && (
@@ -1291,8 +883,6 @@ function App() {
           isHost={isHost}
           timerSeconds={room.settings.timerSeconds}
           deadline={deadline}
-          timerPct={timerPct}
-          timerSecondsLeft={timerSecondsLeft}
           activeAnswerInput={activeAnswerInput}
           onAnswerInputChange={setActiveAnswerInput}
           onSubmitAttempt={submitAttempt}

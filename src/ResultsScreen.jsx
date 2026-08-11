@@ -130,8 +130,8 @@ export function ResultsScreen({
           <div className="stat-detail-block">
             <h3>Nobody Got These</h3>
             <div className="unsolved-list">
-              {stats.unsolved.map((entry, index) => (
-                <div className="unsolved-item" key={index}>
+              {stats.unsolved.map((entry) => (
+                <div className="unsolved-item" key={`${entry.ownerPlayerName}-${entry.value}`}>
                   <div className="unsolved-item-head">
                     <span className="unsolved-item-owner">{entry.ownerPlayerName}</span>
                     <span className="unsolved-item-value">{formatPoints(entry.value)}</span>

@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+
 export function QuestionOverlay({
   activeQuestion,
   isDailyDouble,
@@ -5,8 +7,6 @@ export function QuestionOverlay({
   isHost,
   timerSeconds,
   deadline,
-  timerPct,
-  timerSecondsLeft,
   activeAnswerInput,
   onAnswerInputChange,
   onSubmitAttempt,
@@ -17,13 +17,27 @@ export function QuestionOverlay({
   busy,
   answerMax
 }) {
+  // Own the 100ms timer tick locally so a running countdown only re-renders this
+  // overlay, not the whole app tree.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!deadline) return undefined;
+    const interval = window.setInterval(() => setNow(Date.now()), 100);
+    return () => window.clearInterval(interval);
+  }, [deadline]);
+
+  const timerTotalMs = timerSeconds * 1000;
+  const timerRemainingMs = deadline ? Math.max(0, deadline - now) : 0;
+  const timerPct = timerTotalMs ? (timerRemainingMs / timerTotalMs) * 100 : 0;
+  const timerSecondsLeft = Math.ceil(timerRemainingMs / 1000);
+
   return (
     <div className="question-overlay">
       <div className={`question-overlay-card${isDailyDouble ? ' daily-double' : ''}`}>
         {isDailyDouble && <div className="pill daily-double-pill">DAILY DOUBLE ×{activeQuestion.multiplier}</div>}
         <div className="active-meta">
           <span>
-            {activeQuestion.ownerPlayerName} -{' '}
+            {activeQuestion.ownerPlayerName} ·{' '}
             {isDailyDouble
               ? `$${activeQuestion.value} → $${activeQuestion.value * activeQuestion.multiplier}`
               : `$${activeQuestion.value}`}
