@@ -74,11 +74,11 @@ export function HelpModal({ onClose }) {
               attempt correct instead if it was judged wrong by mistake.
             </li>
             <li>
-              <strong>Pass:</strong> close out the question entirely with no team credited.
+              <strong>Pass:</strong> give up the current team's turn on this question without ending it, so
+              the next team can attempt it. Happens automatically if the timer runs out.
             </li>
             <li>
-              <strong>Skip Question:</strong> give up the current team's turn on this question without ending
-              it, so another team can attempt it.
+              <strong>Skip Question:</strong> close out the question entirely with no team credited.
             </li>
           </ul>
         </div>

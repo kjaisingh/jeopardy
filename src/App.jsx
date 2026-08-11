@@ -4,7 +4,6 @@ import QRCode from 'qrcode';
 import { ResultsScreen } from './ResultsScreen.jsx';
 import { HelpModal } from './components/HelpModal.jsx';
 import { FlashBanner } from './components/FlashBanner.jsx';
-import { ReactionOverlay } from './components/ReactionOverlay.jsx';
 import { QuestionOverlay } from './components/QuestionOverlay.jsx';
 import { TopBar } from './components/TopBar.jsx';
 import { SupersededScreen } from './components/SupersededScreen.jsx';
@@ -184,7 +183,6 @@ function App() {
 
   const [flash, setFlash] = useState(null);
   const [flashCursor, setFlashCursor] = useState(null);
-  const [reactions, setReactions] = useState([]);
 
   const [deadline, setDeadline] = useState(null);
 
@@ -201,7 +199,7 @@ function App() {
     [room]
   );
 
-  const { muted, toggleMuted, musicOn, toggleMusic, play } = useSound(isHost);
+  const { muted, toggleMuted, play } = useSound(isHost);
 
   const teamMap = useMemo(() => teamById(room?.teams || []), [room]);
   const activeQuestion = room?.activeQuestion || null;
@@ -268,7 +266,7 @@ function App() {
     if (!pending.length) return;
     const next = pending[pending.length - 1];
     setFlashCursor(tail);
-    const mapped = toFlash(next, teamMap);
+    const mapped = toFlash(next);
     if (!mapped) return;
     const soundName = SOUND_BY_TYPE[next.type];
     if (soundName) play(soundName);
@@ -278,11 +276,19 @@ function App() {
       questionKey: next.ownerPlayerId ? `${next.ownerPlayerId}:${next.value}` : null,
       visible: true
     });
-  }, [room?.events, flash, flashCursor, teamMap, play]);
+  }, [room?.events, flash, flashCursor, play]);
 
-  // Flash lifecycle: banners stay up until manually dismissed, then a short exit fade.
+  // Flash lifecycle: closable banners stay up until manually dismissed; others
+  // auto-dismiss after a couple seconds. Either way, a short exit fade follows.
   useEffect(() => {
-    if (!flash || flash.visible) return undefined;
+    if (!flash) return undefined;
+    if (flash.visible) {
+      if (flash.closable) return undefined;
+      const autoDismiss = window.setTimeout(() => {
+        setFlash((current) => (current?.id === flash.id ? { ...current, visible: false } : current));
+      }, 1600);
+      return () => window.clearTimeout(autoDismiss);
+    }
     const exitTimeout = window.setTimeout(() => {
       setFlash((current) => (current?.id === flash.id ? null : current));
     }, 200);
@@ -330,20 +336,11 @@ function App() {
       setSession(null);
       setNotice('You were removed from the room by the host.');
     };
-    const onReaction = ({ emoji, playerName }) => {
-      const id = crypto.randomUUID();
-      const left = 15 + Math.random() * 70;
-      setReactions((current) => [...current, { id, emoji, playerName, left }]);
-      window.setTimeout(() => {
-        setReactions((current) => current.filter((entry) => entry.id !== id));
-      }, 2600);
-    };
     socket.on('room:updated', onRoom);
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('session:superseded', onSuperseded);
     socket.on('room:kicked', onKicked);
-    socket.on('reaction:flash', onReaction);
     if (socket.connected) onConnect();
     return () => {
       socket.off('room:updated', onRoom);
@@ -351,7 +348,6 @@ function App() {
       socket.off('disconnect', onDisconnect);
       socket.off('session:superseded', onSuperseded);
       socket.off('room:kicked', onKicked);
-      socket.off('reaction:flash', onReaction);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -423,7 +419,7 @@ function App() {
     const timeout = window.setTimeout(() => {
       setDeadline(null);
       play('timeUp');
-      skipTeam();
+      advanceTeam();
     }, Math.max(0, deadline - Date.now()));
     return () => window.clearTimeout(timeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -678,19 +674,14 @@ function App() {
       await call('question:attempt', { code: room.code, playerId: session.playerId, answer });
     });
 
-  const skipTeam = () =>
+  const advanceTeam = () =>
     run('skip', () => call('question:skip', { code: room.code, playerId: session.playerId }));
 
   const overrideIncorrect = () =>
     run('override', () => call('question:override', { code: room.code, playerId: session.playerId }));
 
-  const passQuestion = () =>
+  const closeQuestion = () =>
     run('pass', () => call('question:pass', { code: room.code, playerId: session.playerId }));
-
-  // Fire-and-forget: reactions are decorative and must never block on the shared busy lock.
-  const sendReaction = (emoji) => {
-    call('reaction:send', { code: room.code, playerId: session.playerId, emoji }).catch(() => {});
-  };
 
   const kickPlayer = (targetPlayerId, targetName) => {
     if (!window.confirm(`Remove ${targetName} from the game?`)) return undefined;
@@ -846,10 +837,8 @@ function App() {
         me={me}
         isHost={isHost}
         muted={muted}
-        musicOn={musicOn}
         onHelpOpen={() => setHelpOpen(true)}
         onToggleMuted={toggleMuted}
-        onToggleMusic={toggleMusic}
         onGoHome={resetToHome}
         onLeave={leaveCompletely}
         onCopyRoomCode={copyRoomCode}
@@ -913,7 +902,6 @@ function App() {
           activeQuestion={activeQuestion}
           busy={busy}
           onSelectQuestion={selectQuestion}
-          onSendReaction={sendReaction}
         />
       )}
 
@@ -929,8 +917,8 @@ function App() {
           onAnswerInputChange={setActiveAnswerInput}
           onSubmitAttempt={submitAttempt}
           onOverrideIncorrect={overrideIncorrect}
-          onPassQuestion={passQuestion}
-          onSkipTeam={skipTeam}
+          onPassQuestion={advanceTeam}
+          onSkipTeam={closeQuestion}
           lastWrongAttempt={room.lastWrongAttempt}
           busy={busy}
           answerMax={ATTEMPT_MAX}
@@ -938,7 +926,6 @@ function App() {
       )}
 
       <FlashBanner flash={flash} onDismiss={dismissFlash} />
-      <ReactionOverlay reactions={reactions} />
       {error && <div className="error sticky" role="alert">{error}</div>}
       {helpFragment}
     </div>

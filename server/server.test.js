@@ -692,17 +692,3 @@ test('gameStore: serialize/deserialize round-trips hostDisconnectedAt and questi
   assert.equal(restored.settings.questionsPerPlayer, 7);
 });
 
-test('gameStore: sendReaction rejects an emoji outside the allowlist', async () => {
-  const host = await gameStore.createRoom('Host', 'socket-reaction', DEFAULT_SETTINGS);
-  await assert.rejects(
-    () => gameStore.sendReaction(host.code, host.playerId, '🐍'),
-    /Unsupported reaction/
-  );
-});
-
-test('gameStore: sendReaction resolves with the room code and player name for an allowed emoji', async () => {
-  const host = await gameStore.createRoom('Host', 'socket-reaction-ok', DEFAULT_SETTINGS);
-  const result = await gameStore.sendReaction(host.code, host.playerId, gameStore.REACTIONS[0]);
-  assert.equal(result.code, host.code);
-  assert.equal(result.playerName, 'Host');
-});

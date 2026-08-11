@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 const MUTE_KEY = 'jeopardy-muted';
-const MUSIC_KEY = 'jeopardy-music';
 let audioContext = null;
 
 const getContext = () => {
@@ -98,7 +97,6 @@ const startPad = (ctx) => {
 
 export const useSound = (enabled) => {
   const [muted, setMuted] = useState(() => localStorage.getItem(MUTE_KEY) === 'true');
-  const [musicOn, setMusicOn] = useState(() => localStorage.getItem(MUSIC_KEY) === 'true');
   const warmedRef = useRef(false);
   const stopPadRef = useRef(null);
 
@@ -118,7 +116,7 @@ export const useSound = (enabled) => {
   }, [enabled]);
 
   useEffect(() => {
-    if (!enabled || !musicOn || muted) {
+    if (!enabled || muted) {
       stopPadRef.current?.();
       stopPadRef.current = null;
       return undefined;
@@ -130,20 +128,12 @@ export const useSound = (enabled) => {
       stopPadRef.current?.();
       stopPadRef.current = null;
     };
-  }, [enabled, musicOn, muted]);
+  }, [enabled, muted]);
 
   const toggleMuted = useCallback(() => {
     setMuted((current) => {
       const next = !current;
       localStorage.setItem(MUTE_KEY, String(next));
-      return next;
-    });
-  }, []);
-
-  const toggleMusic = useCallback(() => {
-    setMusicOn((current) => {
-      const next = !current;
-      localStorage.setItem(MUSIC_KEY, String(next));
       return next;
     });
   }, []);
@@ -160,5 +150,5 @@ export const useSound = (enabled) => {
     [enabled, muted]
   );
 
-  return { muted, toggleMuted, musicOn, toggleMusic, play };
+  return { muted, toggleMuted, play };
 };

@@ -2,11 +2,11 @@ export const teamById = (teams) => Object.fromEntries(teams.map((team) => [team.
 
 export const tailSeq = (events) => (events && events.length ? events[events.length - 1].seq : 0);
 
-export const toFlash = (event, teamMap) => {
+export const toFlash = (event) => {
   switch (event.type) {
     case 'attempt-correct':
     case 'override-correct':
-      return { tone: 'correct', headline: 'CORRECT!', detail: `${event.teamName} +$${event.points}` };
+      return { tone: 'correct', headline: 'CORRECT!', detail: `${event.teamName} +$${event.points}`, closable: true };
     case 'attempt-incorrect':
       return {
         tone: 'incorrect',
@@ -23,22 +23,22 @@ export const toFlash = (event, teamMap) => {
       return {
         tone: 'incorrect',
         headline: 'PASSED',
-        detail: `Answer: ${event.correctAnswer}`
+        detail: `Answer: ${event.correctAnswer}`,
+        closable: true
       };
     case 'question-exhausted':
       return {
         tone: 'incorrect',
         headline: 'QUESTION UNANSWERED',
-        detail: `Answer: ${event.correctAnswer}`
+        detail: `Answer: ${event.correctAnswer}`,
+        closable: true
       };
-    case 'daily-double': {
-      const teamName = teamMap[event.teamId]?.name || 'A team';
+    case 'daily-double':
       return {
         tone: 'daily-double',
         headline: 'DAILY DOUBLE!',
-        detail: `${teamName} · $${event.value} → $${event.value * event.multiplier}`
+        detail: `$${event.value} → $${event.value * event.multiplier}`
       };
-    }
     case 'host-changed':
       return { tone: 'correct', headline: 'NEW HOST', detail: `${event.newHostName} is now the host` };
     case 'settings-changed':

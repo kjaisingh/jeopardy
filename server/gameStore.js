@@ -16,8 +16,6 @@ const MAX_EVENTS = 30;
 const HOST_GRACE_MS = Number(process.env.HOST_GRACE_MS || 30000);
 
 const rooms = new Map();
-const REACTIONS = ['👍', '😂', '😮', '🎉', '😢', '🔥'];
-const REACTION_SET = new Set(REACTIONS);
 
 const byName = (left, right) => left.name.localeCompare(right.name);
 
@@ -410,7 +408,6 @@ const validateSettings = (payload) => {
 
 export const gameStore = {
   HOST_GRACE_MS,
-  REACTIONS,
   valuesForCount,
   serializeRoom,
   deserializeRoom,
@@ -797,13 +794,5 @@ export const gameStore = {
     const room = rooms.get(normalizeRoomCode(rawCode));
     if (!room) return [];
     return buildRoomViews(room);
-  },
-
-  async sendReaction(rawCode, playerId, emoji) {
-    const room = await ensureRoom(rawCode);
-    const player = room.players.get(playerId);
-    if (!player) throw new Error('Player not found');
-    if (!REACTION_SET.has(emoji)) throw new Error('Unsupported reaction');
-    return { code: room.code, playerName: player.name };
   }
 };

@@ -1,5 +1,3 @@
-import { REACTIONS } from '../constants.js';
-
 export function BoardScreen({
   room,
   currentTeam,
@@ -9,14 +7,12 @@ export function BoardScreen({
   renderScoreCard,
   activeQuestion,
   busy,
-  onSelectQuestion,
-  onSendReaction
+  onSelectQuestion
 }) {
   return (
     <section className="card">
       <div className="board-top">
-        <h2>Board</h2>
-        <div>{currentTeam ? `${currentTeam.name}'s turn to pick` : ''}</div>
+        <div className="turn-indicator">{currentTeam ? `${currentTeam.name}'s turn to pick` : ''}</div>
         {isHost && (
           <button type="button" className="subtle" onClick={onToggleScoreEdit}>
             {scoreEditMode ? 'Done Editing Scores' : 'Edit Scores'}
@@ -25,20 +21,6 @@ export function BoardScreen({
       </div>
 
       <div className="score-row">{room.teams.map((team) => renderScoreCard(team, true))}</div>
-
-      <div className="reaction-bar">
-        {REACTIONS.map((emoji) => (
-          <button
-            key={emoji}
-            type="button"
-            className="reaction-button"
-            aria-label={`React with ${emoji}`}
-            onClick={() => onSendReaction(emoji)}
-          >
-            {emoji}
-          </button>
-        ))}
-      </div>
 
       <div className="board-grid">
         {room.board.columns.map((column) => (

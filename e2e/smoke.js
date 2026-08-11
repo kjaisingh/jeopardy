@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 
 // Multi-user smoke test: drives a real server + real Chromium contexts (host
 // + 2 players) through a full game — lobby, questions, teams, a full board
-// (daily double, a steal, a timer expiry, an emoji reaction), results, and
-// restart — asserting state stays in sync across every context.
+// (daily double, a steal, a timer expiry), results, and restart — asserting
+// state stays in sync across every context.
 //
 // Runs the production server (dist + Socket.IO) on port 3001, matching the
 // VITE_SERVER_URL baked into the build by the local .env, with CLIENT_URL
@@ -167,18 +167,6 @@ async function main() {
         const value = (await cell.textContent()).replace('$', '').trim();
         const isLastCellOverall = c === columnCount - 1 && v === cellCount - 1;
         const isFirstCellOverall = cellIndex === 0;
-        const isSecondCellOverall = cellIndex === 1;
-
-        if (isSecondCellOverall) {
-          // --- emoji reaction: fired on the open board (a question overlay would
-          // block the reaction bar), must sync to host + player 3 ---
-          await p2.locator('.reaction-button').first().click();
-          await Promise.all([
-            host.locator('.reaction-float').first().waitFor({ timeout: 3000 }),
-            p3.locator('.reaction-float').first().waitFor({ timeout: 3000 })
-          ]);
-          log('emoji reaction synced to host + player 3');
-        }
 
         await cell.click();
         await Promise.all(players.map((page) => page.locator('.question-overlay').waitFor()));
