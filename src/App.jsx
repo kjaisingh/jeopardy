@@ -199,7 +199,7 @@ function App() {
     [room]
   );
 
-  const { muted, toggleMuted, play } = useSound(isHost);
+  const { muted, toggleMuted, musicOn, toggleMusic, play } = useSound(isHost);
 
   const teamMap = useMemo(() => teamById(room?.teams || []), [room]);
   const activeQuestion = room?.activeQuestion || null;
@@ -829,8 +829,10 @@ function App() {
         me={me}
         isHost={isHost}
         muted={muted}
+        musicOn={musicOn}
         onHelpOpen={() => setHelpOpen(true)}
         onToggleMuted={toggleMuted}
+        onToggleMusic={toggleMusic}
         onGoHome={resetToHome}
         onLeave={leaveCompletely}
         onCopyRoomCode={copyRoomCode}

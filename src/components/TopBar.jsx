@@ -4,8 +4,10 @@ export function TopBar({
   me,
   isHost,
   muted,
+  musicOn,
   onHelpOpen,
   onToggleMuted,
+  onToggleMusic,
   onGoHome,
   onLeave,
   onCopyRoomCode,
@@ -43,9 +45,14 @@ export function TopBar({
           ?
         </button>
         {isHost && (
-          <button type="button" className="secondary subtle" onClick={onToggleMuted}>
-            {muted ? 'Unmute' : 'Mute'}
-          </button>
+          <>
+            <button type="button" className="secondary subtle" onClick={onToggleMuted}>
+              {muted ? 'Unmute' : 'Mute'}
+            </button>
+            <button type="button" className="secondary subtle" onClick={onToggleMusic}>
+              {musicOn ? 'Music: On' : 'Music: Off'}
+            </button>
+          </>
         )}
         <button type="button" className="secondary" onClick={onGoHome}>
           Go Home

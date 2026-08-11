@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 const MUTE_KEY = 'jeopardy-muted';
+const MUSIC_KEY = 'jeopardy-music';
 let audioContext = null;
 
 const getContext = () => {
@@ -59,9 +60,47 @@ const VOICES = {
   }
 };
 
+const PAD_NOTES = [130.81, 164.81, 196.0]; // C3, E3, G3 — soft ambient triad
+
+const startPad = (ctx) => {
+  const master = ctx.createGain();
+  master.gain.setValueAtTime(0, ctx.currentTime);
+  master.gain.linearRampToValueAtTime(0.05, ctx.currentTime + 1.5);
+  master.connect(ctx.destination);
+
+  const lfo = ctx.createOscillator();
+  const lfoGain = ctx.createGain();
+  lfo.type = 'sine';
+  lfo.frequency.setValueAtTime(0.1, ctx.currentTime);
+  lfoGain.gain.setValueAtTime(0.015, ctx.currentTime);
+  lfo.connect(lfoGain);
+  lfoGain.connect(master.gain);
+  lfo.start();
+
+  const oscillators = PAD_NOTES.map((frequency) => {
+    const oscillator = ctx.createOscillator();
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(frequency, ctx.currentTime);
+    oscillator.connect(master);
+    oscillator.start();
+    return oscillator;
+  });
+
+  return () => {
+    const stopTime = ctx.currentTime + 0.6;
+    master.gain.cancelScheduledValues(ctx.currentTime);
+    master.gain.setValueAtTime(master.gain.value, ctx.currentTime);
+    master.gain.linearRampToValueAtTime(0, stopTime);
+    lfo.stop(stopTime);
+    oscillators.forEach((oscillator) => oscillator.stop(stopTime));
+  };
+};
+
 export const useSound = (enabled) => {
   const [muted, setMuted] = useState(() => localStorage.getItem(MUTE_KEY) === 'true');
+  const [musicOn, setMusicOn] = useState(() => localStorage.getItem(MUSIC_KEY) === 'true');
   const warmedRef = useRef(false);
+  const stopPadRef = useRef(null);
 
   useEffect(() => {
     if (!enabled || warmedRef.current) return undefined;
@@ -78,10 +117,33 @@ export const useSound = (enabled) => {
     };
   }, [enabled]);
 
+  useEffect(() => {
+    if (!enabled || !musicOn || muted) {
+      stopPadRef.current?.();
+      stopPadRef.current = null;
+      return undefined;
+    }
+    const ctx = getContext();
+    if (ctx.state === 'suspended') ctx.resume();
+    stopPadRef.current = startPad(ctx);
+    return () => {
+      stopPadRef.current?.();
+      stopPadRef.current = null;
+    };
+  }, [enabled, musicOn, muted]);
+
   const toggleMuted = useCallback(() => {
     setMuted((current) => {
       const next = !current;
       localStorage.setItem(MUTE_KEY, String(next));
+      return next;
+    });
+  }, []);
+
+  const toggleMusic = useCallback(() => {
+    setMusicOn((current) => {
+      const next = !current;
+      localStorage.setItem(MUSIC_KEY, String(next));
       return next;
     });
   }, []);
@@ -98,5 +160,5 @@ export const useSound = (enabled) => {
     [enabled, muted]
   );
 
-  return { muted, toggleMuted, play };
+  return { muted, toggleMuted, musicOn, toggleMusic, play };
 };
