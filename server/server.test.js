@@ -307,6 +307,62 @@ test('gameStore: event seq strictly increases and the feed caps at 30', async ()
   assert.equal(latest.events[0].seq, 11);
 });
 
+// --- Turn order & question targeting ----------------------------------------------
+
+test('gameStore: setTeams is gated to the team-setup phase', async () => {
+  const { code, hostPlayerId, players } = await setupGame();
+  const teams = [{ name: 'Rebuilt', playerIds: players.map((player) => player.id) }];
+
+  await assert.rejects(
+    () => gameStore.setTeams(code, hostPlayerId, { teams }),
+    /Teams can only be configured during team setup/
+  );
+});
+
+test('gameStore: finite turn order is symmetric, giving the selecting team the same attempts as everyone else', async () => {
+  const { code, hostPlayerId, room } = await setupGame({ playerCount: 3, mode: 'finite', rounds: 2 });
+  const cell = findOpenCell(room.board);
+  const { activeQuestion } = await gameStore.selectQuestion(code, hostPlayerId, cell.playerId, cell.value);
+
+  const attemptsPerTeam = new Map();
+  for (const teamId of activeQuestion.attemptOrder) {
+    attemptsPerTeam.set(teamId, (attemptsPerTeam.get(teamId) || 0) + 1);
+  }
+
+  assert.equal(activeQuestion.attemptOrder.length, room.teams.length * 2);
+  for (const team of room.teams) {
+    assert.equal(attemptsPerTeam.get(team.id), 2);
+  }
+  assert.equal(attemptsPerTeam.get(activeQuestion.selectedByTeamId), 2);
+});
+
+test('gameStore: selectQuestion coerces a string value to the matching numeric cell', async () => {
+  const { code, hostPlayerId, room } = await setupGame();
+  const cell = findOpenCell(room.board);
+
+  const { activeQuestion } = await gameStore.selectQuestion(code, hostPlayerId, cell.playerId, String(cell.value));
+
+  assert.equal(activeQuestion.value, cell.value);
+  assert.equal(activeQuestion.ownerPlayerId, cell.playerId);
+});
+
+test('gameStore: a 3-team finite round rotates through every team in order before exhausting', async () => {
+  const { code, hostPlayerId, room } = await setupGame({ playerCount: 3, mode: 'finite', rounds: 1 });
+  const cell = findOpenCell(room.board);
+  await gameStore.selectQuestion(code, hostPlayerId, cell.playerId, cell.value);
+
+  const { room: afterFirstMiss, result: firstMiss } = await gameStore.submitAttempt(code, hostPlayerId, 'wrong 1');
+  assert.equal(firstMiss.exhausted, false);
+  assert.equal(afterFirstMiss.events.at(-1).nextTeamName, 'Team2');
+
+  const { room: afterSecondMiss, result: secondMiss } = await gameStore.submitAttempt(code, hostPlayerId, 'wrong 2');
+  assert.equal(secondMiss.exhausted, false);
+  assert.equal(afterSecondMiss.events.at(-1).nextTeamName, 'Team3');
+
+  const { result: thirdMiss } = await gameStore.submitAttempt(code, hostPlayerId, 'wrong 3');
+  assert.equal(thirdMiss.exhausted, true);
+});
+
 // --- Daily Double ----------------------------------------------------------------
 
 test('gameStore: exactly one cell is boosted when Daily Double is enabled, and it is hidden while open', async () => {

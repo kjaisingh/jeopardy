@@ -40,17 +40,17 @@ export function HelpModal({ onClose }) {
           <h3>Answering a Question</h3>
           <ul>
             <li>
-              <strong>Submit</strong> — lock in your team's typed answer for judging.
+              <strong>Submit:</strong> lock in your team's typed answer for judging.
             </li>
             <li>
-              <strong>Override Previous</strong> — appears after an incorrect attempt, lets the host mark that
+              <strong>Override Previous:</strong> appears after an incorrect attempt, lets the host mark that
               attempt correct instead if it was judged wrong by mistake.
             </li>
             <li>
-              <strong>Pass</strong> — close out the question entirely with no team credited.
+              <strong>Pass:</strong> close out the question entirely with no team credited.
             </li>
             <li>
-              <strong>Skip Question</strong> — give up the current team's turn on this question without ending
+              <strong>Skip Question:</strong> give up the current team's turn on this question without ending
               it, so another team can attempt it.
             </li>
           </ul>

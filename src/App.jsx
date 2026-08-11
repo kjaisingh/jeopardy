@@ -44,6 +44,41 @@ const buildTeams = (count, players) => {
   return teams;
 };
 
+// Preserves the host's existing team arrangement across a player joining/leaving
+// team-setup, rather than discarding it for a full reshuffle.
+const reconcileTeams = (current, targetCount, players) => {
+  const validIds = new Set(players.map((player) => player.id));
+  const assigned = new Set();
+
+  let teams = current.map((team) => ({
+    ...team,
+    playerIds: team.playerIds.filter((id) => validIds.has(id))
+  }));
+  teams.forEach((team) => team.playerIds.forEach((id) => assigned.add(id)));
+
+  while (teams.length < targetCount) {
+    teams.push({ id: crypto.randomUUID(), name: `Team ${teams.length + 1}`, playerIds: [] });
+  }
+  if (teams.length > targetCount) {
+    const overflow = teams.slice(targetCount);
+    teams = teams.slice(0, targetCount);
+    overflow.forEach((team) => {
+      team.playerIds.forEach((id) => {
+        const smallest = teams.reduce((min, entry) => (entry.playerIds.length < min.playerIds.length ? entry : min), teams[0]);
+        smallest.playerIds.push(id);
+      });
+    });
+  }
+
+  players.forEach((player) => {
+    if (assigned.has(player.id)) return;
+    const smallest = teams.reduce((min, entry) => (entry.playerIds.length < min.playerIds.length ? entry : min), teams[0]);
+    smallest.playerIds.push(player.id);
+  });
+
+  return teams;
+};
+
 const reconcileDrafts = (current, targetCount) => {
   const next = [...current];
   if (next.length > targetCount) {
@@ -66,9 +101,20 @@ const reconcileDrafts = (current, targetCount) => {
   return next;
 };
 
+const ACK_TIMEOUT_MS = 8000;
+
 const call = (event, payload) =>
   new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error('Server did not respond in time. Check your connection and try again.'));
+    }, ACK_TIMEOUT_MS);
     socket.emit(event, payload, (response) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (!response?.ok) {
         reject(new Error(response?.message || 'Operation failed'));
         return;
@@ -319,14 +365,19 @@ function App() {
     const configuredIds = new Set(teamConfig.flatMap((team) => team.playerIds));
     const coversRoomExactly =
       currentIds.size === configuredIds.size && [...currentIds].every((id) => configuredIds.has(id));
-    if (coversRoomExactly) return;
-    setTeamConfig(buildTeams(teamCount, room.players));
+    if (coversRoomExactly && teamConfig.length === teamCount) return;
+    if (teamConfig.length === 0) {
+      setTeamConfig(buildTeams(teamCount, room.players));
+      return;
+    }
+    setTeamConfig((current) => reconcileTeams(current, teamCount, room.players));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [room, isHost, teamCount]);
 
   useEffect(() => {
+    if (scoreEditMode) return;
     setScoreDrafts(Object.fromEntries((room?.teams || []).map((team) => [team.id, String(team.score)])));
-  }, [room]);
+  }, [room, scoreEditMode]);
 
   useEffect(() => {
     if (!isHost || !activeQuestion || !room?.settings?.timerSeconds) {
@@ -857,7 +908,7 @@ function App() {
             )}
           </div>
           {!hostPlayer?.isConnected && (
-            <div className="pill offline">Host disconnected — promoting a new host shortly</div>
+            <div className="pill offline">Host disconnected, promoting a new host shortly</div>
           )}
         </div>
         <div>
@@ -1050,7 +1101,7 @@ function App() {
           <div className="players-list">
             {room.players.map((player) => (
               <div key={player.id} className={`pill ${player.submitted ? 'success' : ''}${!player.isConnected ? ' offline' : ''}`}>
-                {player.name} - {player.submitted ? 'Ready' : 'Editing'}
+                {player.name} · {player.submitted ? 'Ready' : 'Editing'}
                 {!player.isConnected ? ' (offline)' : ''}
                 {isHost && player.id !== session.playerId && (
                   <button

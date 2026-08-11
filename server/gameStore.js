@@ -369,9 +369,7 @@ const buildAttemptOrder = (teams, selectedTeamId, settings) => {
     return orderedTeams;
   }
 
-  const [first, ...rest] = orderedTeams;
-  const repeatedOthers = Array.from({ length: settings.rounds }, () => rest).flat();
-  return [first, ...repeatedOthers];
+  return Array.from({ length: settings.rounds }, () => orderedTeams).flat();
 };
 
 const resetForNewRound = (room, nextCode) => {
@@ -518,6 +516,7 @@ export const gameStore = {
   async setTeams(rawCode, hostPlayerId, payload) {
     const room = await ensureRoom(rawCode);
     if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can configure teams');
+    if (room.phase !== 'team-setup') throw new Error('Teams can only be configured during team setup');
     if (!Array.isArray(payload.teams) || payload.teams.length < 1) throw new Error('At least one team is required');
 
     const allPlayers = new Set(room.players.keys());
@@ -617,7 +616,8 @@ export const gameStore = {
     if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can select questions');
     if (room.phase !== 'playing') throw new Error('Game is not in playing phase');
     if (room.activeQuestion) throw new Error('Another question is active');
-    if (!valuesForCount(room.settings.questionsPerPlayer).includes(Number(value))) {
+    value = Number(value);
+    if (!valuesForCount(room.settings.questionsPerPlayer).includes(value)) {
       throw new Error('Invalid question value');
     }
 
