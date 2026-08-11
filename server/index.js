@@ -197,6 +197,18 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('reaction:send', async ({ code, playerId, emoji } = {}, ack = () => {}) => {
+    try {
+      const { code: roomCode, playerName } = await gameStore.sendReaction(code, playerId, emoji);
+      ack({ ok: true });
+      for (const { socketId } of gameStore.roomViews(roomCode)) {
+        io.to(socketId).emit('reaction:flash', { emoji, playerName });
+      }
+    } catch (error) {
+      ack({ ok: false, message: error.message });
+    }
+  });
+
   socket.on('room:leave', async ({ code, playerId } = {}, ack = () => {}) => {
     try {
       const result = await gameStore.leaveRoom(code, playerId);

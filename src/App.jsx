@@ -4,6 +4,7 @@ import QRCode from 'qrcode';
 import { ResultsScreen } from './ResultsScreen.jsx';
 import { HelpModal } from './components/HelpModal.jsx';
 import { FlashBanner } from './components/FlashBanner.jsx';
+import { ReactionOverlay } from './components/ReactionOverlay.jsx';
 import { QuestionOverlay } from './components/QuestionOverlay.jsx';
 import { TopBar } from './components/TopBar.jsx';
 import { SupersededScreen } from './components/SupersededScreen.jsx';
@@ -183,6 +184,7 @@ function App() {
 
   const [flash, setFlash] = useState(null);
   const [flashCursor, setFlashCursor] = useState(null);
+  const [reactions, setReactions] = useState([]);
 
   const [deadline, setDeadline] = useState(null);
 
@@ -328,11 +330,20 @@ function App() {
       setSession(null);
       setNotice('You were removed from the room by the host.');
     };
+    const onReaction = ({ emoji, playerName }) => {
+      const id = crypto.randomUUID();
+      const left = 15 + Math.random() * 70;
+      setReactions((current) => [...current, { id, emoji, playerName, left }]);
+      window.setTimeout(() => {
+        setReactions((current) => current.filter((entry) => entry.id !== id));
+      }, 2600);
+    };
     socket.on('room:updated', onRoom);
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('session:superseded', onSuperseded);
     socket.on('room:kicked', onKicked);
+    socket.on('reaction:flash', onReaction);
     if (socket.connected) onConnect();
     return () => {
       socket.off('room:updated', onRoom);
@@ -340,6 +351,7 @@ function App() {
       socket.off('disconnect', onDisconnect);
       socket.off('session:superseded', onSuperseded);
       socket.off('room:kicked', onKicked);
+      socket.off('reaction:flash', onReaction);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -675,6 +687,11 @@ function App() {
   const passQuestion = () =>
     run('pass', () => call('question:pass', { code: room.code, playerId: session.playerId }));
 
+  // Fire-and-forget: reactions are decorative and must never block on the shared busy lock.
+  const sendReaction = (emoji) => {
+    call('reaction:send', { code: room.code, playerId: session.playerId, emoji }).catch(() => {});
+  };
+
   const kickPlayer = (targetPlayerId, targetName) => {
     if (!window.confirm(`Remove ${targetName} from the game?`)) return undefined;
     return run('kick', () => call('player:kick', { code: room.code, playerId: session.playerId, targetPlayerId }));
@@ -896,6 +913,7 @@ function App() {
           activeQuestion={activeQuestion}
           busy={busy}
           onSelectQuestion={selectQuestion}
+          onSendReaction={sendReaction}
         />
       )}
 
@@ -920,6 +938,7 @@ function App() {
       )}
 
       <FlashBanner flash={flash} onDismiss={dismissFlash} />
+      <ReactionOverlay reactions={reactions} />
       {error && <div className="error sticky" role="alert">{error}</div>}
       {helpFragment}
     </div>

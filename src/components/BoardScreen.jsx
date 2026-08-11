@@ -1,3 +1,5 @@
+import { REACTIONS } from '../constants.js';
+
 export function BoardScreen({
   room,
   currentTeam,
@@ -7,7 +9,8 @@ export function BoardScreen({
   renderScoreCard,
   activeQuestion,
   busy,
-  onSelectQuestion
+  onSelectQuestion,
+  onSendReaction
 }) {
   return (
     <section className="card">
@@ -22,6 +25,20 @@ export function BoardScreen({
       </div>
 
       <div className="score-row">{room.teams.map((team) => renderScoreCard(team, true))}</div>
+
+      <div className="reaction-bar">
+        {REACTIONS.map((emoji) => (
+          <button
+            key={emoji}
+            type="button"
+            className="reaction-button"
+            aria-label={`React with ${emoji}`}
+            onClick={() => onSendReaction(emoji)}
+          >
+            {emoji}
+          </button>
+        ))}
+      </div>
 
       <div className="board-grid">
         {room.board.columns.map((column) => (

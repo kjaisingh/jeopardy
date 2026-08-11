@@ -602,6 +602,29 @@ button:disabled {
   gap: 8px;
 }
 
+.reaction-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.reaction-button {
+  width: auto;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 4px 10px;
+  font-size: 1.3rem;
+  line-height: 1;
+  border-radius: 10px;
+  background: var(--bg-button-subtle);
+  border: 1px solid var(--border-panel);
+}
+
+.reaction-button:hover {
+  border-color: var(--border-bright);
+  transform: translateY(-1px);
+}
+
 .score-card.active {
   border-color: var(--gold-bright);
   background: var(--gold-dark-bg);
@@ -807,6 +830,36 @@ button:disabled {
 
 .code-block {
   user-select: all;
+}
+
+.reaction-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 340;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.reaction-float {
+  position: absolute;
+  bottom: 8%;
+  font-size: 2.2rem;
+  animation: reaction-float 2.6s ease-out forwards;
+}
+
+@keyframes reaction-float {
+  0% {
+    transform: translateY(0) scale(0.6);
+    opacity: 0;
+  }
+  15% {
+    transform: translateY(-10vh) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-70vh) scale(1.1);
+    opacity: 0;
+  }
 }
 
 .pill.notice {
