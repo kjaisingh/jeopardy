@@ -55,6 +55,7 @@ export function QuestionOverlay({
                 value={activeAnswerInput}
                 maxLength={answerMax}
                 placeholder="Type team answer"
+                aria-label="Team answer"
                 autoFocus
                 onChange={(event) => onAnswerInputChange(event.target.value)}
               />

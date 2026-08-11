@@ -180,6 +180,8 @@ function App() {
   const [superseded, setSuperseded] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [helpOpen, setHelpOpen] = useState(false);
+  const [connected, setConnected] = useState(socket.connected);
+  const everConnectedRef = useRef(socket.connected);
 
   const me = useMemo(() => room?.players.find((player) => player.id === session?.playerId) || null, [room, session]);
   const isHost = Boolean(room && session && room.hostPlayerId === session.playerId);
@@ -304,8 +306,11 @@ function App() {
       setError('');
     };
     const onConnect = () => {
+      everConnectedRef.current = true;
+      setConnected(true);
       if (!suppressAutoResumeRef.current && sessionRef.current) reconnectSession(sessionRef.current);
     };
+    const onDisconnect = () => setConnected(false);
     const onSuperseded = () => setSuperseded(true);
     const onKicked = () => {
       suppressAutoResumeRef.current = true;
@@ -316,12 +321,14 @@ function App() {
     };
     socket.on('room:updated', onRoom);
     socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
     socket.on('session:superseded', onSuperseded);
     socket.on('room:kicked', onKicked);
     if (socket.connected) onConnect();
     return () => {
       socket.off('room:updated', onRoom);
       socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
       socket.off('session:superseded', onSuperseded);
       socket.off('room:kicked', onKicked);
     };
@@ -689,10 +696,16 @@ function App() {
   const canResume = Boolean(session?.code && session?.playerId && !room);
 
   const helpFragment = helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />;
+  const connectionFragment = !connected && (
+    <div className="pill offline connection-pill" role="status">
+      {everConnectedRef.current ? 'Reconnecting…' : 'Connecting…'}
+    </div>
+  );
 
   if (superseded) {
     return (
       <div className="app">
+        {connectionFragment}
         <div className="home-screen">
           <div className="card home-card">
             <h1>Jeopardy</h1>
@@ -712,6 +725,7 @@ function App() {
   if (!room || !session) {
     return (
       <div className="app">
+        {connectionFragment}
         <div className="home-screen">
           <div className="card home-card">
             <div className="home-title-row">
@@ -725,6 +739,7 @@ function App() {
               value={createName}
               maxLength={NAME_MAX}
               placeholder="Your name"
+              aria-label="Your name"
               onChange={(event) => setCreateName(event.target.value)}
             />
 
@@ -796,12 +811,14 @@ function App() {
                 value={joinCode}
                 maxLength={6}
                 placeholder="Room code"
+                aria-label="Room code"
                 onChange={(event) => setJoinCode(event.target.value.toUpperCase())}
               />
               <input
                 value={joinName}
                 maxLength={NAME_MAX}
                 placeholder="Your name"
+                aria-label="Your name"
                 onChange={(event) => setJoinName(event.target.value)}
               />
             </div>
@@ -827,7 +844,7 @@ function App() {
             </div>
           )}
         </div>
-        {error && <div className="error sticky">{error}</div>}
+        {error && <div className="error sticky" role="alert">{error}</div>}
         {helpFragment}
       </div>
     );
@@ -838,6 +855,7 @@ function App() {
   if (room.phase === 'finished') {
     return (
       <div className="app">
+        {connectionFragment}
         <ResultsScreen
           room={room}
           isHost={isHost}
@@ -851,9 +869,9 @@ function App() {
           onRestart={restartGame}
           onLeave={leaveCompletely}
         />
-        {notice && <div className="pill notice">{notice}</div>}
+        {notice && <div className="pill notice" role="status">{notice}</div>}
         <FlashBanner flash={flash} onDismiss={dismissFlash} />
-        {error && <div className="error sticky">{error}</div>}
+        {error && <div className="error sticky" role="alert">{error}</div>}
         {helpFragment}
       </div>
     );
@@ -872,6 +890,7 @@ function App() {
             inputMode="numeric"
             value={scoreDrafts[team.id] ?? ''}
             maxLength={8}
+            aria-label={`Score for ${team.name}`}
             onChange={(event) => updateScoreDraft(team.id, event.target.value)}
           />
           <button type="button" className="subtle" disabled={Boolean(busy)} onClick={() => saveTeamScore(team.id)}>
@@ -891,6 +910,7 @@ function App() {
 
   return (
     <div className="app">
+      {connectionFragment}
       <header className="topbar card">
         <div>
           <div className="label">Room code</div>
@@ -935,7 +955,7 @@ function App() {
         </div>
       </header>
 
-      {notice && <div className="pill notice">{notice}</div>}
+      {notice && <div className="pill notice" role="status">{notice}</div>}
 
       {room.phase === 'lobby' && isHost && qrDataUrl && (
         <section className="card invite-card">
@@ -1184,6 +1204,7 @@ function App() {
                       <input
                         value={team.name}
                         maxLength={NAME_MAX}
+                        aria-label="Team name"
                         onChange={(event) => {
                           const nextName = event.target.value;
                           setTeamConfig((current) =>
@@ -1285,7 +1306,7 @@ function App() {
       )}
 
       <FlashBanner flash={flash} onDismiss={dismissFlash} />
-      {error && <div className="error sticky">{error}</div>}
+      {error && <div className="error sticky" role="alert">{error}</div>}
       {helpFragment}
     </div>
   );

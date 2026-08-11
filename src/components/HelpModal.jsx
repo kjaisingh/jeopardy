@@ -1,14 +1,34 @@
 import { useEffect, useRef } from 'react';
 
+const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
 export function HelpModal({ onClose }) {
   const closeButtonRef = useRef(null);
+  const cardRef = useRef(null);
 
   useEffect(() => {
     const previouslyFocused = document.activeElement;
     closeButtonRef.current?.focus();
 
     const onKeyDown = (event) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab' || !cardRef.current) return;
+
+      const focusable = Array.from(cardRef.current.querySelectorAll(FOCUSABLE_SELECTOR));
+      if (!focusable.length) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => {
@@ -19,7 +39,14 @@ export function HelpModal({ onClose }) {
 
   return (
     <div className="help-overlay" onClick={onClose}>
-      <div className="help-card" role="dialog" aria-modal="true" aria-label="How to play" onClick={(event) => event.stopPropagation()}>
+      <div
+        className="help-card"
+        role="dialog"
+        aria-modal="true"
+        aria-label="How to play"
+        ref={cardRef}
+        onClick={(event) => event.stopPropagation()}
+      >
         <div className="help-head">
           <h2>How to Play</h2>
           <button type="button" className="help-close" aria-label="Close help" ref={closeButtonRef} onClick={onClose}>

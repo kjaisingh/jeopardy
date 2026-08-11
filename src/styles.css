@@ -253,6 +253,7 @@ button:disabled {
 }
 
 .pill-kick {
+  position: relative;
   width: 18px;
   height: 18px;
   flex-shrink: 0;
@@ -265,6 +266,17 @@ button:disabled {
   color: #c3cbf5;
   font-size: 0.7rem;
   line-height: 1;
+}
+
+.pill-kick::before,
+.help-close::before,
+.result-flash-close::before {
+  content: '';
+  position: absolute;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  width: max(44px, 100%);
+  height: max(44px, 100%);
 }
 
 .pill-kick:hover {
@@ -330,6 +342,7 @@ button:disabled {
 }
 
 .help-close {
+  position: relative;
   width: 30px;
   height: 30px;
   min-width: 30px;
