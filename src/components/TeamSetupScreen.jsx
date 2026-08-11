@@ -9,6 +9,7 @@ export function TeamSetupScreen({
   teamConfig,
   onTeamConfigChange,
   onMovePlayerTeam,
+  onShuffleTeams,
   startGameBlocker,
   duplicateTeamNames,
   busy,
@@ -39,6 +40,9 @@ export function TeamSetupScreen({
                   onChange={(event) => onRegenerateTeams(event.target.value)}
                 />
               </div>
+              <button type="button" className="secondary subtle" onClick={onShuffleTeams}>
+                Shuffle Teams
+              </button>
             </div>
 
             <div className="player-pool">

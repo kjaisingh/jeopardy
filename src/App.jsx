@@ -33,6 +33,15 @@ const blankDraft = (count) =>
     answer: ''
   }));
 
+const shuffleArray = (input) => {
+  const output = [...input];
+  for (let i = output.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [output[i], output[j]] = [output[j], output[i]];
+  }
+  return output;
+};
+
 const buildTeams = (count, players) => {
   const teams = Array.from({ length: count }, (_, index) => ({
     id: crypto.randomUUID(),
@@ -578,6 +587,18 @@ function App() {
     setTeamConfig(buildTeams(count, room.players));
   };
 
+  const shuffleTeams = () => {
+    if (!room) return;
+    const shuffled = shuffleArray(room.players);
+    setTeamConfig((current) => {
+      const teams = current.map((team) => ({ ...team, playerIds: [] }));
+      shuffled.forEach((player, index) => {
+        teams[index % teams.length].playerIds.push(player.id);
+      });
+      return teams;
+    });
+  };
+
   const movePlayerTeam = (playerId, teamId) => {
     setTeamConfig((current) =>
       current.map((team) => ({
@@ -854,6 +875,7 @@ function App() {
           teamConfig={teamConfig}
           onTeamConfigChange={setTeamConfig}
           onMovePlayerTeam={movePlayerTeam}
+          onShuffleTeams={shuffleTeams}
           startGameBlocker={startGameBlocker}
           duplicateTeamNames={duplicateTeamNames}
           busy={busy}
