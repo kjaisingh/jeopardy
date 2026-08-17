@@ -21,3 +21,9 @@ create trigger rooms_set_updated_at
 before update on public.rooms
 for each row
 execute function public.set_updated_at();
+
+-- Keepalive: Supabase free tier pauses projects idle 7+ days. Run this once
+-- in the Supabase SQL editor so the project always shows activity, independent
+-- of whether the app server (Render) is awake.
+-- create extension if not exists pg_cron;
+-- select cron.schedule('keepalive', '0 0 */3 * *', $$ select 1 $$);
