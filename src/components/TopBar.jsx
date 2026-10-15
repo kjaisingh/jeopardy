@@ -12,6 +12,7 @@ export function TopBar({
   hostPlayer,
   me,
   isHost,
+  soundAvailable,
   muted,
   onHelpOpen,
   onToggleMuted,
@@ -26,16 +27,12 @@ export function TopBar({
         <div className="label">Room Code</div>
         <div className="room-code-row">
           <div className="room-code code-block">{room.code}</div>
-          {typeof navigator !== 'undefined' && navigator.clipboard && (
-            <>
-              <button type="button" className="subtle" onClick={onCopyRoomCode}>
-                <CopyIcon /> Code
-              </button>
-              <button type="button" className="subtle" onClick={onCopyShareLink}>
-                <CopyIcon /> Link
-              </button>
-            </>
-          )}
+          <button type="button" className="subtle" onClick={onCopyRoomCode}>
+            <CopyIcon /> Code
+          </button>
+          <button type="button" className="subtle" onClick={onCopyShareLink}>
+            <CopyIcon /> Link
+          </button>
         </div>
         {!hostPlayer?.isConnected && (
           <div className="pill offline">Host disconnected, promoting a new host shortly</div>
@@ -51,9 +48,9 @@ export function TopBar({
         <button type="button" className="help-trigger" aria-label="How to play" onClick={onHelpOpen}>
           ?
         </button>
-        {isHost && (
+        {isHost && soundAvailable && (
           <button type="button" className="secondary subtle" onClick={onToggleMuted}>
-            {muted ? 'Unmute' : 'Mute'}
+            {muted ? 'Enable Sound' : 'Mute Sound'}
           </button>
         )}
         <button type="button" className="secondary" onClick={onGoHome}>

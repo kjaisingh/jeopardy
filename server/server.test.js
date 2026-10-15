@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { isAnswerCorrect } from './match.js';
-import { requiredText, requiredInteger, requiredOneOf, assertUniqueNames } from './validate.js';
+import {
+  requiredText,
+  requiredInteger,
+  requiredOneOf,
+  assertUniqueNames,
+  validateRoomCode
+} from './validate.js';
 import { gameStore } from './gameStore.js';
 
 const DEFAULT_SETTINGS = { mode: 'finite', rounds: 1, dailyDouble: false, timerSeconds: 0, questionsPerPlayer: 5 };
@@ -117,6 +123,12 @@ test('validate: requiredOneOf rejects values outside the enum', () => {
 
 test('validate: assertUniqueNames is case-insensitive', () => {
   assert.throws(() => assertUniqueNames(['Alice', 'alice'], 'Name'), /already taken/);
+});
+
+test('validate: room codes must match the exact generated format', () => {
+  assert.equal(validateRoomCode('abc234'), 'ABC234');
+  assert.throws(() => validateRoomCode('ABC'), /6 letters or numbers/);
+  assert.throws(() => validateRoomCode('ABC10O'), /6 letters or numbers/);
 });
 
 // --- gameStore: submission edge cases -------------------------------------------
@@ -516,7 +528,7 @@ test('gameStore: host reconnecting within the grace period keeps them as host', 
   await gameStore.joinRoom(host.code, 'P1', 'socket-promote3-p1');
 
   gameStore.disconnect('socket-promote3-host');
-  const reconnected = await gameStore.reconnect(host.code, host.playerId, 'socket-promote3-host-new');
+  const reconnected = await gameStore.reconnect(host.code, host.sessionToken, 'socket-promote3-host-new');
   assert.equal(reconnected.room.hostPlayerId, host.playerId);
 
   await new Promise((resolve) => setTimeout(resolve, gameStore.HOST_GRACE_MS + 10));
@@ -536,7 +548,7 @@ test('gameStore: promotion no-ops when nobody is connected, then fires on the ne
   const promotedWithNobodyConnected = await gameStore.maybePromoteHost(host.code);
   assert.equal(promotedWithNobodyConnected, false);
 
-  const reconnected = await gameStore.reconnect(host.code, p1.playerId, 'socket-promote2-p1-new');
+  const reconnected = await gameStore.reconnect(host.code, p1.sessionToken, 'socket-promote2-p1-new');
   assert.equal(reconnected.room.hostPlayerId, p1.playerId);
 });
 
@@ -575,11 +587,47 @@ test('gameStore: reconnecting with a live prior socket supersedes it; the old so
   const host = await gameStore.createRoom('Host', 'socket-super-host', DEFAULT_SETTINGS);
   const p1 = await gameStore.joinRoom(host.code, 'P1', 'socket-super-p1-a');
 
-  const reconnected = await gameStore.reconnect(host.code, p1.playerId, 'socket-super-p1-b');
+  const reconnected = await gameStore.reconnect(host.code, p1.sessionToken, 'socket-super-p1-b');
   assert.equal(reconnected.supersededSocketId, 'socket-super-p1-a');
 
   const disconnectResult = gameStore.disconnect('socket-super-p1-a');
   assert.equal(disconnectResult, null);
+});
+
+test('gameStore: session tokens authenticate reconnects without leaking through room views', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-token-host', DEFAULT_SETTINGS);
+  assert.ok(host.sessionToken);
+  assert.equal(Object.hasOwn(host.room.players[0], 'sessionTokenHash'), false);
+
+  await assert.rejects(
+    () => gameStore.reconnect(host.code, host.playerId, 'socket-token-guess'),
+    /invalid or expired/
+  );
+  const reconnected = await gameStore.reconnect(host.code, host.sessionToken, 'socket-token-new');
+  assert.equal(reconnected.playerId, host.playerId);
+});
+
+test('gameStore: server-authoritative expiry advances the active attempt exactly once', async () => {
+  const { code, hostPlayerId, room } = await setupGame({
+    playerCount: 2,
+    mode: 'infinite',
+    timerSeconds: 1,
+    questionsPerPlayer: 1
+  });
+  const cell = findOpenCell(room.board);
+  const selected = await gameStore.selectQuestion(code, hostPlayerId, cell.playerId, cell.value);
+  const active = selected.activeQuestion;
+
+  assert.ok(active.deadlineAt > Date.now());
+  assert.equal(await gameStore.expireAttempt(code, active.id, active.attemptIndex), null);
+  await new Promise((resolve) => setTimeout(resolve, 1010));
+
+  const expired = await gameStore.expireAttempt(code, active.id, active.attemptIndex);
+  assert.equal(expired.result.skipped, true);
+  assert.equal(
+    await gameStore.expireAttempt(code, active.id, active.attemptIndex),
+    null
+  );
 });
 
 // --- Configurable question count -------------------------------------------------
@@ -691,4 +739,3 @@ test('gameStore: serialize/deserialize round-trips hostDisconnectedAt and questi
   assert.equal(restored.hostDisconnectedAt, 1700000000000);
   assert.equal(restored.settings.questionsPerPlayer, 7);
 });
-

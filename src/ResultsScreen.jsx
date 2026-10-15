@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { buildStandings, buildStats } from './gameStats.js';
-
-const formatPoints = (value) => `$${value.toLocaleString()}`;
+import { formatMoney } from './format.js';
 
 export function ResultsScreen({
   room,
@@ -60,6 +59,7 @@ export function ResultsScreen({
                     inputMode="numeric"
                     value={scoreDrafts[team.id] ?? ''}
                     maxLength={8}
+                    aria-label={`Score for ${team.name}`}
                     onChange={(event) => onScoreDraftChange(team.id, event.target.value)}
                   />
                   <button
@@ -73,8 +73,8 @@ export function ResultsScreen({
                 </div>
               ) : (
                 <>
-                  <div className="standings-score">{formatPoints(team.score)}</div>
-                  {!team.isLeader && <div className="standings-gap">-{formatPoints(team.gapToLeader)}</div>}
+                  <div className="standings-score">{formatMoney(team.score)}</div>
+                  {!team.isLeader && <div className="standings-gap">-{formatMoney(team.gapToLeader)}</div>}
                 </>
               )}
             </div>
@@ -91,7 +91,7 @@ export function ResultsScreen({
         </div>
         {stats.biggestAnswer && (
           <div className="stat-tile">
-            <div className="stat-tile-value">{formatPoints(stats.biggestAnswer.points)}</div>
+            <div className="stat-tile-value">{formatMoney(stats.biggestAnswer.points)}</div>
             <div className="stat-tile-label">
               Biggest Answer{stats.biggestAnswer.isDailyDouble ? ' (Daily Double)' : ''} · {stats.biggestAnswer.teamName}
             </div>
@@ -106,7 +106,7 @@ export function ResultsScreen({
         {stats.dailyDouble && (
           <div className="stat-tile">
             <div className="stat-tile-value">
-              {stats.dailyDouble.solved ? formatPoints(stats.dailyDouble.points) : 'Missed'}
+              {stats.dailyDouble.solved ? formatMoney(stats.dailyDouble.points) : 'Missed'}
             </div>
             <div className="stat-tile-label">
               Daily Double (${stats.dailyDouble.value}){stats.dailyDouble.teamName ? ` · ${stats.dailyDouble.teamName}` : ''}
@@ -120,7 +120,7 @@ export function ResultsScreen({
           <div className="stat-detail-block">
             <h3>Toughest Question</h3>
             <p>
-              {stats.toughestQuestion.ownerPlayerName}'s {formatPoints(stats.toughestQuestion.value)} question took{' '}
+              {stats.toughestQuestion.ownerPlayerName}'s {formatMoney(stats.toughestQuestion.value)} question took{' '}
               {stats.toughestQuestion.attemptCount} attempts.
             </p>
           </div>
@@ -134,7 +134,7 @@ export function ResultsScreen({
                 <div className="unsolved-item" key={`${entry.ownerPlayerName}-${entry.value}`}>
                   <div className="unsolved-item-head">
                     <span className="unsolved-item-owner">{entry.ownerPlayerName}</span>
-                    <span className="unsolved-item-value">{formatPoints(entry.value)}</span>
+                    <span className="unsolved-item-value">{formatMoney(entry.value)}</span>
                   </div>
                   <div className="unsolved-item-prompt">{entry.prompt}</div>
                   <div className="unsolved-answer">Answer: {entry.answer}</div>

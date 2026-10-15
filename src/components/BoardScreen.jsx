@@ -22,7 +22,8 @@ export function BoardScreen({
 
       <div className="score-row">{room.teams.map((team) => renderScoreCard(team, true))}</div>
 
-      <div className="board-grid">
+      <div className="board-scroll" role="region" aria-label="Question board" tabIndex={0}>
+        <div className="board-grid">
         {room.board.columns.map((column) => (
           <div key={column.playerId} className="board-column">
             <div className="board-header">{column.playerName}</div>
@@ -33,6 +34,7 @@ export function BoardScreen({
                 className={`board-cell ${cell.status}${
                   cell.multiplier > 1 && cell.status !== 'open' ? ' daily-double-cell' : ''
                 }`}
+                aria-label={`${column.playerName} for $${cell.value}, ${cell.status}`}
                 disabled={!isHost || room.phase !== 'playing' || cell.status !== 'open' || Boolean(activeQuestion) || Boolean(busy)}
                 onClick={() => onSelectQuestion(column.playerId, cell.value)}
               >
@@ -41,6 +43,7 @@ export function BoardScreen({
             ))}
           </div>
         ))}
+        </div>
       </div>
     </section>
   );

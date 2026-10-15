@@ -29,7 +29,7 @@ export function SettingsForm({
       </div>
 
       <div className="control-field">
-        <label htmlFor="round-mode">Round mode</label>
+      <label htmlFor="round-mode">Attempt mode</label>
         <select id="round-mode" value={mode} onChange={(event) => onModeChange(event.target.value)}>
           <option value="finite">Finite</option>
           <option value="infinite">Infinite</option>
@@ -38,7 +38,7 @@ export function SettingsForm({
 
       {mode === 'finite' && (
         <div className="control-field">
-          <label htmlFor="rounds-per-team">Rounds per team</label>
+          <label htmlFor="rounds-per-team">Attempts per team, per question</label>
           <input
             id="rounds-per-team"
             type="number"

@@ -36,6 +36,21 @@ export const requiredOneOf = (value, label, options) => {
 
 export const normalizeRoomCode = (code) => requiredText(code, 'Room code').toUpperCase();
 
+export const validateRoomCode = (code) => {
+  const normalized = normalizeRoomCode(code);
+  if (!/^[A-HJ-NP-Z2-9]{6}$/.test(normalized)) {
+    throw new Error('Room code must be 6 letters or numbers');
+  }
+  return normalized;
+};
+
+export const requiredObject = (value, label = 'Request') => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value;
+};
+
 export const assertUniqueNames = (names, label) => {
   const seen = new Set();
   for (const name of names) {

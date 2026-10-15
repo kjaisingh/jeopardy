@@ -1,4 +1,4 @@
-import { ANSWER_MAX, PROMPT_MAX, valuesForCount } from '../constants.js';
+import { ANSWER_MAX, PROMPT_MAX } from '../constants.js';
 import { SettingsForm } from './SettingsForm.jsx';
 
 export function LobbyScreen({
@@ -18,7 +18,6 @@ export function LobbyScreen({
   drafts,
   invalidDraftIds,
   onUpdateDraft,
-  onUpdateDraftValue,
   onSubmitQuestions,
   onKickPlayer,
   allSubmitted,
@@ -88,17 +87,13 @@ export function LobbyScreen({
               {drafts.map((draft) => (
                 <div key={draft.localId} className={`question-card${invalidDraftIds.has(draft.localId) ? ' invalid' : ''}`}>
                   <div className="question-head">
-                    <label>Value</label>
-                    <select value={draft.value} onChange={(event) => onUpdateDraftValue(draft.localId, event.target.value)}>
-                      {valuesForCount(room.settings.questionsPerPlayer).map((value) => (
-                        <option key={value} value={value}>
-                          ${value}
-                        </option>
-                      ))}
-                    </select>
+                    <span className="label">Value</span>
+                    <strong>${draft.value}</strong>
                   </div>
-                  <label>Question</label>
-                  <textarea
+                <label htmlFor={`question-${draft.localId}`}>Question</label>
+                <textarea
+                  id={`question-${draft.localId}`}
+                  aria-label={`Question for $${draft.value}`}
                     rows={3}
                     maxLength={PROMPT_MAX}
                     value={draft.prompt}
@@ -110,8 +105,10 @@ export function LobbyScreen({
                       {draft.prompt.length}/{PROMPT_MAX}
                     </div>
                   )}
-                  <label>Answer</label>
-                  <input
+                <label htmlFor={`answer-${draft.localId}`}>Answer</label>
+                <input
+                  id={`answer-${draft.localId}`}
+                  aria-label={`Answer for $${draft.value}`}
                     maxLength={ANSWER_MAX}
                     value={draft.answer}
                     placeholder="Expected answer"

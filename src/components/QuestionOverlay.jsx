@@ -1,4 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+
+const FOCUSABLE_SELECTOR =
+  'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export function QuestionOverlay({
   activeQuestion,
@@ -12,11 +15,13 @@ export function QuestionOverlay({
   onSubmitAttempt,
   onOverrideIncorrect,
   onPassQuestion,
-  onSkipTeam,
+  onSkipQuestion,
   lastWrongAttempt,
   busy,
   answerMax
 }) {
+  const titleId = useId();
+  const cardRef = useRef(null);
   // Own the 100ms timer tick locally so a running countdown only re-renders this
   // overlay, not the whole app tree.
   const [now, setNow] = useState(() => Date.now());
@@ -26,6 +31,34 @@ export function QuestionOverlay({
     return () => window.clearInterval(interval);
   }, [deadline]);
 
+  useEffect(() => {
+    const previouslyFocused = document.activeElement;
+    if (!isHost) cardRef.current?.focus();
+    const onKeyDown = (event) => {
+      if (event.key !== 'Tab' || !cardRef.current) return;
+      const focusable = Array.from(cardRef.current.querySelectorAll(FOCUSABLE_SELECTOR));
+      if (!focusable.length) {
+        event.preventDefault();
+        cardRef.current.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      previouslyFocused?.focus?.();
+    };
+  }, [activeQuestion.id, isHost]);
+
   const timerTotalMs = timerSeconds * 1000;
   const timerRemainingMs = deadline ? Math.max(0, deadline - now) : 0;
   const timerPct = timerTotalMs ? (timerRemainingMs / timerTotalMs) * 100 : 0;
@@ -33,7 +66,14 @@ export function QuestionOverlay({
 
   return (
     <div className="question-overlay">
-      <div className={`question-overlay-card${isDailyDouble ? ' daily-double' : ''}`}>
+      <div
+        className={`question-overlay-card${isDailyDouble ? ' daily-double' : ''}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        ref={cardRef}
+      >
         {isDailyDouble && <div className="pill daily-double-pill">DAILY DOUBLE ×{activeQuestion.multiplier}</div>}
         <div className="active-meta">
           <span>
@@ -45,20 +85,29 @@ export function QuestionOverlay({
           <span>Answering team: {teamMap[activeQuestion.currentTeamId]?.name || '-'}</span>
         </div>
 
-        <h2 className="question-prompt">{activeQuestion.prompt}</h2>
+        <h2 id={titleId} className="question-prompt">
+          {activeQuestion.prompt}
+        </h2>
+
+        {timerSeconds > 0 && deadline && (
+          <div className="timer-block">
+            <progress
+              className={`timer-track${timerPct < 20 ? ' danger' : timerPct < 50 ? ' warn' : ''}`}
+              aria-label="Answer time remaining"
+              aria-valuetext={`${timerSecondsLeft} seconds remaining`}
+              max={timerSeconds}
+              value={timerSecondsLeft}
+            >
+              {timerSecondsLeft} seconds remaining
+            </progress>
+            <div className="timer-count" aria-hidden="true">
+              {timerSecondsLeft}s
+            </div>
+          </div>
+        )}
 
         {isHost && (
-          <>
-            {timerSeconds > 0 && deadline && (
-              <div className="timer-block">
-                <div className={`timer-track${timerPct < 20 ? ' danger' : timerPct < 50 ? ' warn' : ''}`}>
-                  <div className="timer-bar" style={{ width: `${timerPct}%` }} />
-                </div>
-                <div className="timer-count">{timerSecondsLeft}s</div>
-              </div>
-            )}
-
-            <form
+          <form
               onSubmit={(event) => {
                 event.preventDefault();
                 if (!activeAnswerInput.trim() || busy) return;
@@ -85,12 +134,11 @@ export function QuestionOverlay({
                 <button type="button" className="secondary" disabled={Boolean(busy)} onClick={onPassQuestion}>
                   Pass
                 </button>
-                <button type="button" className="secondary" disabled={Boolean(busy)} onClick={onSkipTeam}>
+                <button type="button" className="secondary" disabled={Boolean(busy)} onClick={onSkipQuestion}>
                   Skip Question
                 </button>
               </div>
-            </form>
-          </>
+          </form>
         )}
       </div>
     </div>

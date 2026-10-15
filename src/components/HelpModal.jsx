@@ -86,17 +86,16 @@ export function HelpModal({ onClose }) {
         <div className="help-section">
           <h3>Daily Double</h3>
           <p>
-            If enabled, one question on the board is a secret Daily Double. The team that selects it can wager
-            points before seeing the prompt.
+            If enabled, one question on the board is a secret Daily Double worth twice its displayed value.
           </p>
         </div>
 
         <div className="help-section">
-          <h3>Timer &amp; Rounds</h3>
+          <h3>Timer &amp; Attempts</h3>
           <p>
-            The host can set an answer timer (or leave it off) and choose a round mode: <strong>Finite</strong>{' '}
-            plays a fixed number of rounds per team, while <strong>Infinite</strong> keeps the board open until
-            the host ends the game.
+            The host can set an answer timer or leave it off. In <strong>Finite</strong> mode, each team gets the
+            configured number of attempts per question. <strong>Infinite</strong> mode cycles through teams until
+            someone answers or the host skips the question.
           </p>
         </div>
 

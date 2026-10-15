@@ -21,7 +21,9 @@ export function TeamSetupScreen({
 
       <p className="settings-summary">
         {room.settings.questionsPerPlayer} questions/player ·{' '}
-        {room.settings.mode === 'finite' ? `${room.settings.rounds} round(s)` : 'Infinite rounds'} ·{' '}
+        {room.settings.mode === 'finite'
+          ? `${room.settings.rounds} attempt(s) per team`
+          : 'Unlimited attempts'} ·{' '}
         Timer {room.settings.timerSeconds > 0 ? `${room.settings.timerSeconds}s` : 'off'} ·{' '}
         Daily Double {room.settings.dailyDouble ? 'on' : 'off'}
       </p>
@@ -31,8 +33,9 @@ export function TeamSetupScreen({
           <div className="team-column">
             <div className="inline-controls">
               <div className="control-field">
-                <label>Number of teams</label>
-                <input
+              <label htmlFor="team-count">Number of teams</label>
+              <input
+                id="team-count"
                   type="number"
                   min="1"
                   max={room.players.length}
@@ -55,7 +58,11 @@ export function TeamSetupScreen({
                       {player.name}
                       {!player.isConnected ? ' (offline)' : ''}
                     </span>
-                    <select value={assignedTeam?.id || ''} onChange={(event) => onMovePlayerTeam(player.id, event.target.value)}>
+                    <select
+                      aria-label={`Team for ${player.name}`}
+                      value={assignedTeam?.id || ''}
+                      onChange={(event) => onMovePlayerTeam(player.id, event.target.value)}
+                    >
                       {teamConfig.map((team) => (
                         <option key={team.id} value={team.id}>
                           {team.name}
@@ -75,7 +82,7 @@ export function TeamSetupScreen({
                   <input
                     value={team.name}
                     maxLength={NAME_MAX}
-                    aria-label="Team name"
+                    aria-label={`Name for team ${teamConfig.indexOf(team) + 1}`}
                     onChange={(event) => {
                       const nextName = event.target.value;
                       onTeamConfigChange((current) =>
@@ -93,7 +100,11 @@ export function TeamSetupScreen({
               <div className="field-error warn">Duplicate team names: {duplicateTeamNames.join(', ')}</div>
             )}
 
-            <button type="button" disabled={Boolean(busy) || Boolean(startGameBlocker)} onClick={onStartGame}>
+            <button
+              type="button"
+              disabled={Boolean(busy) || Boolean(startGameBlocker) || duplicateTeamNames.length > 0}
+              onClick={onStartGame}
+            >
               {busy === 'start-game' ? 'Starting…' : 'Start Game'}
             </button>
           </div>

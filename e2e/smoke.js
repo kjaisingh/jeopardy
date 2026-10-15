@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 
 const PORT = 3001;
 const BASE_URL = `http://localhost:${PORT}`;
-const TIMER_SECONDS = 30;
+const TIMER_SECONDS = 1;
 
 const log = (msg) => console.log(`[e2e] ${msg}`);
 
@@ -33,9 +33,12 @@ async function waitForHealth(url, timeoutMs = 15000) {
 }
 
 async function main() {
-  log('starting server on :5173');
+  log(`starting server on :${PORT}`);
+  const testEnv = { ...process.env };
+  delete testEnv.SUPABASE_URL;
+  delete testEnv.SUPABASE_SERVICE_ROLE_KEY;
   const server = spawn('node', ['server/index.js'], {
-    env: { ...process.env, PORT: String(PORT), CLIENT_URL: BASE_URL },
+    env: { ...testEnv, PORT: String(PORT), CLIENT_URL: BASE_URL },
     stdio: 'inherit'
   });
   server.on('error', (error) => {
@@ -66,8 +69,8 @@ async function main() {
     await createCard.getByLabel('Answer timer').selectOption(String(TIMER_SECONDS));
     // finite mode (1 round) so a skipped/expired attempt truly exhausts and
     // rotates the turn, rather than infinite mode's endless re-loop
-    await createCard.getByLabel('Round mode').selectOption('finite');
-    await createCard.getByLabel('Rounds per team').fill('1');
+    await createCard.getByLabel('Attempt mode').selectOption('finite');
+    await createCard.getByLabel('Attempts per team, per question').fill('1');
     const dailyDoubleBox = createCard.getByLabel('Enable Daily Double');
     if (!(await dailyDoubleBox.isChecked())) await dailyDoubleBox.check();
     await createCard.getByRole('button', { name: 'Create Game' }).click();
@@ -86,6 +89,21 @@ async function main() {
     await Promise.all(players.map((page) => page.locator('.room-code').waitFor()));
     log('both players joined, room state in sync');
 
+    // --- detach/resume and local draft recovery ---
+    await host.getByRole('button', { name: 'Go Home' }).click();
+    await host.getByRole('button', { name: 'Resume Previous Game' }).click();
+    await host.locator('.room-code').waitFor();
+    assert.equal((await host.locator('.room-code').textContent()).trim(), roomCode);
+
+    const firstHostCard = host.locator('.question-card').first();
+    await firstHostCard.locator('textarea').fill('Draft survives reload');
+    await firstHostCard.locator('input').fill('Draft answer');
+    await host.waitForTimeout(100);
+    await host.reload();
+    await host.locator('.room-code').waitFor();
+    assert.equal(await host.locator('.question-card').first().locator('textarea').inputValue(), 'Draft survives reload');
+    log('go-home resume and local draft recovery confirmed');
+
     // --- submit questions (all three write their own board column) ---
     const answers = {}; // playerName -> { [value]: correctAnswerText }
     const submitQuestions = async (page, name) => {
@@ -94,7 +112,7 @@ async function main() {
       const count = await cards.count();
       for (let i = 0; i < count; i += 1) {
         const card = cards.nth(i);
-        const value = await card.locator('select').inputValue();
+        const value = (await card.locator('.question-head strong').textContent()).replace('$', '').trim();
         const answerText = `${name}-answer-${value}`;
         await card.locator('textarea').fill(`${name}'s clue for $${value}`);
         await card.locator('input').fill(answerText);
@@ -115,7 +133,17 @@ async function main() {
     await Promise.all(players.map((page) => page.getByRole('heading', { name: 'Team Setup' }).waitFor()));
     log('advanced to team setup, in sync across contexts');
 
-    // --- shuffle teams (randomizer feature) + start ---
+    // --- duplicate-name guard, shuffle teams, and start ---
+    const teamNameInputs = host.locator('.team-card input');
+    await teamNameInputs.nth(0).fill('Duplicate');
+    await teamNameInputs.nth(1).fill('Duplicate');
+    assert.equal(
+      await host.getByRole('button', { name: 'Start Game' }).isDisabled(),
+      true,
+      'duplicate team names should block Start Game'
+    );
+    await teamNameInputs.nth(0).fill('Team 1');
+    await teamNameInputs.nth(1).fill('Team 2');
     await host.getByRole('button', { name: 'Shuffle Teams' }).click();
     const startBtn = host.getByRole('button', { name: 'Start Game' });
     await startBtn.waitFor();
@@ -194,7 +222,7 @@ async function main() {
           const scoreAfter = await scoreOf(host, secondResponder);
           assert.equal(scoreAfter - (secondResponder === firstResponder ? scoreBefore : 0), Number(value) * multiplier, 'steal winner did not receive the expected points');
         } else if (isLastCellOverall) {
-          // --- timer expiry: host does nothing, the client-side deadline must
+          // --- timer expiry: host does nothing, the server-side deadline must
           // auto-skip and pass the turn (finite mode: exhaustion still needs
           // the new responder to actually answer to close the board) ---
           log(`waiting out the ${TIMER_SECONDS}s timer on the final cell to confirm auto-skip`);
@@ -238,6 +266,10 @@ async function main() {
     const newRoomCode = (await host.locator('.room-code').textContent()).trim();
     assert.notEqual(newRoomCode, roomCode, 'restart should issue a new room code');
     log(`restart confirmed: new room ${newRoomCode}, all contexts back at lobby`);
+
+    await submitQuestions(p2, 'Player Two');
+    await host.getByText('Player Two · Ready').waitFor();
+    log('non-host session remained authorized after restart');
 
     log('SMOKE TEST PASSED');
   } finally {

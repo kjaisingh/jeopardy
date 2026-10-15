@@ -1,4 +1,9 @@
-import { NAME_MAX } from '../constants.js';
+import {
+  isCompleteRoomCode,
+  NAME_MAX,
+  normalizeRoomCodeInput,
+  ROOM_CODE_LENGTH
+} from '../constants.js';
 import { SettingsForm } from './SettingsForm.jsx';
 
 export function HomeScreen({
@@ -29,7 +34,13 @@ export function HomeScreen({
 }) {
   return (
     <div className="home-screen">
-      <div className="card home-card">
+      <form
+        className="card home-card"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (createName.trim() && !busy) onCreateRoom();
+        }}
+      >
         <div className="home-title-row">
           <h1>Jeopardy</h1>
           <button type="button" className="help-trigger" aria-label="How to play" onClick={onHelpOpen}>
@@ -42,6 +53,7 @@ export function HomeScreen({
           maxLength={NAME_MAX}
           placeholder="Your name"
           aria-label="Your name"
+          autoComplete="name"
           onChange={(event) => onCreateNameChange(event.target.value)}
         />
 
@@ -58,37 +70,47 @@ export function HomeScreen({
           onDailyDoubleChange={onDailyDoubleChange}
         />
 
-        <button type="button" disabled={!createName.trim() || Boolean(busy)} onClick={onCreateRoom}>
+        <button type="submit" disabled={!createName.trim() || Boolean(busy)}>
           {busy === 'create' ? 'Creating…' : 'Create Game'}
         </button>
-      </div>
+      </form>
 
-      <div className="card home-card">
+      <form
+        className="card home-card"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (isCompleteRoomCode(joinCode) && joinName.trim() && !busy) onJoinRoom();
+        }}
+      >
         <h2>Join a Game</h2>
         <div className="field-stack">
           <input
             value={joinCode}
-            maxLength={6}
+            maxLength={ROOM_CODE_LENGTH}
             placeholder="Room code"
             aria-label="Room code"
-            onChange={(event) => onJoinCodeChange(event.target.value.toUpperCase())}
+            autoCapitalize="characters"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+            onChange={(event) => onJoinCodeChange(normalizeRoomCodeInput(event.target.value))}
           />
           <input
             value={joinName}
             maxLength={NAME_MAX}
             placeholder="Your name"
             aria-label="Your name"
+            autoComplete="name"
             onChange={(event) => onJoinNameChange(event.target.value)}
           />
         </div>
         <button
-          type="button"
-          disabled={!joinCode.trim() || !joinName.trim() || Boolean(busy)}
-          onClick={onJoinRoom}
+          type="submit"
+          disabled={!isCompleteRoomCode(joinCode) || !joinName.trim() || Boolean(busy)}
         >
           {busy === 'join' ? 'Joining…' : 'Join Game'}
         </button>
-      </div>
+      </form>
 
       {canResume && (
         <div className="card home-card">

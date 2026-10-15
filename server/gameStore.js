@@ -1,21 +1,26 @@
 import { customAlphabet } from 'nanoid';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { isAnswerCorrect } from './match.js';
 import { roomRepository } from './roomRepository.js';
+import { positiveIntegerFromEnv, positiveNumberFromEnv } from './config.js';
 import {
   LIMITS,
   requiredText,
   requiredInteger,
   requiredBoolean,
   requiredOneOf,
-  normalizeRoomCode,
+  validateRoomCode,
   assertUniqueNames
 } from './validate.js';
 
 const makeCode = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 6);
 const MAX_EVENTS = 30;
-const HOST_GRACE_MS = Number(process.env.HOST_GRACE_MS || 30000);
+const HOST_GRACE_MS = positiveIntegerFromEnv('HOST_GRACE_MS', 30000);
+const ROOM_RETENTION_MS = positiveNumberFromEnv('ROOM_RETENTION_HOURS', 24) * 60 * 60 * 1000;
+const STATE_VERSION = 2;
 
 const rooms = new Map();
+const roomLoads = new Map();
 
 const byName = (left, right) => left.name.localeCompare(right.name);
 
@@ -29,14 +34,25 @@ const defaultSettings = () => ({
   questionsPerPlayer: 5
 });
 
+const newSessionToken = () => randomBytes(32).toString('base64url');
+const hashSessionToken = (token) => createHash('sha256').update(token).digest('hex');
+const tokenMatches = (token, expectedHash) => {
+  if (typeof token !== 'string' || !expectedHash) return false;
+  const actual = Buffer.from(hashSessionToken(token), 'hex');
+  const expected = Buffer.from(expectedHash, 'hex');
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+};
+
 const toStoredPlayer = (player) => ({
   id: player.id,
   name: player.name,
+  sessionTokenHash: player.sessionTokenHash,
   submitted: Boolean(player.submitted),
   questions: Array.isArray(player.questions) ? player.questions : []
 });
 
 const serializeRoom = (room) => ({
+  schemaVersion: STATE_VERSION,
   code: room.code,
   hostPlayerId: room.hostPlayerId,
   hostDisconnectedAt: room.hostDisconnectedAt,
@@ -52,13 +68,14 @@ const serializeRoom = (room) => ({
   tiedTeamIds: room.tiedTeamIds,
   events: room.events,
   eventSeq: room.eventSeq,
-  history: room.history
+  history: room.history,
+  lastActivityAt: room.lastActivityAt
 });
 
 const deserializeRoom = (snapshot) => ({
   code: snapshot.code,
   hostPlayerId: snapshot.hostPlayerId,
-  hostDisconnectedAt: snapshot.hostDisconnectedAt || null,
+  hostDisconnectedAt: snapshot.hostDisconnectedAt || Date.now(),
   phase: snapshot.phase || 'lobby',
   players: new Map(
     (snapshot.players || []).map((player) => [
@@ -66,23 +83,35 @@ const deserializeRoom = (snapshot) => ({
       {
         id: player.id,
         name: player.name,
+        sessionTokenHash: player.sessionTokenHash || null,
         socketId: null,
         submitted: Boolean(player.submitted),
         questions: Array.isArray(player.questions) ? player.questions : []
       }
     ])
   ),
-  settings: snapshot.settings || defaultSettings(),
+  settings: { ...defaultSettings(), ...(snapshot.settings || {}) },
   teams: snapshot.teams || [],
   turnTeamId: snapshot.turnTeamId || null,
   board: snapshot.board || null,
-  activeQuestion: snapshot.activeQuestion || null,
+  activeQuestion: snapshot.activeQuestion
+    ? {
+        ...snapshot.activeQuestion,
+        id: snapshot.activeQuestion.id || crypto.randomUUID(),
+        deadlineAt:
+          snapshot.activeQuestion.deadlineAt ||
+          (snapshot.settings?.timerSeconds > 0
+            ? Date.now() + snapshot.settings.timerSeconds * 1000
+            : null)
+      }
+    : null,
   lastWrongAttempt: snapshot.lastWrongAttempt || null,
   winnerTeamId: snapshot.winnerTeamId || null,
   tiedTeamIds: snapshot.tiedTeamIds || [],
   events: snapshot.events || [],
   eventSeq: snapshot.eventSeq || 0,
-  history: snapshot.history || []
+  history: snapshot.history || [],
+  lastActivityAt: snapshot.lastActivityAt || Date.now()
 });
 
 const publicBoard = (board) =>
@@ -159,13 +188,18 @@ const loadRoomIntoMemory = async (code) => {
 };
 
 const ensureRoom = async (rawCode) => {
-  const code = normalizeRoomCode(rawCode);
+  const code = validateRoomCode(rawCode);
   const cachedRoom = rooms.get(code);
   if (cachedRoom) {
     return cachedRoom;
   }
 
-  const persistedRoom = await loadRoomIntoMemory(code);
+  let loadPromise = roomLoads.get(code);
+  if (!loadPromise) {
+    loadPromise = loadRoomIntoMemory(code).finally(() => roomLoads.delete(code));
+    roomLoads.set(code, loadPromise);
+  }
+  const persistedRoom = await loadPromise;
   if (!persistedRoom) {
     throw new Error('Room not found');
   }
@@ -174,7 +208,8 @@ const ensureRoom = async (rawCode) => {
 };
 
 const persistRoom = async (room) => {
-  await roomRepository.saveRoom(serializeRoom(room));
+  room.lastActivityAt = Date.now();
+  roomRepository.saveRoom(serializeRoom(room));
 };
 
 const getPlayerBySocket = (socketId) => {
@@ -347,6 +382,9 @@ const recordMiss = (room, teamId, answerText, skipped) => {
 
   const nextTeamId = currentAttemptTeamId(active, room.settings);
   active.currentTeamId = nextTeamId;
+  active.deadlineAt = room.settings.timerSeconds > 0
+    ? Date.now() + room.settings.timerSeconds * 1000
+    : null;
   const nextTeam = room.teams.find((entry) => entry.id === nextTeamId);
 
   pushEvent(room, {
@@ -408,6 +446,7 @@ const validateSettings = (payload) => {
 
 export const gameStore = {
   HOST_GRACE_MS,
+  ROOM_RETENTION_MS,
   valuesForCount,
   serializeRoom,
   deserializeRoom,
@@ -420,11 +459,24 @@ export const gameStore = {
     return roomRepository.getConfigError();
   },
 
+  persistenceStatus() {
+    return roomRepository.getStatus();
+  },
+
+  async probePersistence() {
+    return roomRepository.probe();
+  },
+
+  async flushPersistence() {
+    await roomRepository.flush();
+  },
+
   async createRoom(rawName, socketId, rawSettings) {
     const name = requiredText(rawName, 'Name', LIMITS.name);
     const settings = validateSettings(rawSettings || {});
     const code = await generateUniqueCode();
     const playerId = crypto.randomUUID();
+    const sessionToken = newSessionToken();
     const room = {
       code,
       hostPlayerId: playerId,
@@ -441,14 +493,22 @@ export const gameStore = {
       tiedTeamIds: [],
       events: [],
       eventSeq: 0,
-      history: []
+      history: [],
+      lastActivityAt: Date.now()
     };
 
-    room.players.set(playerId, { id: playerId, name, socketId, submitted: false, questions: [] });
+    room.players.set(playerId, {
+      id: playerId,
+      name,
+      sessionTokenHash: hashSessionToken(sessionToken),
+      socketId,
+      submitted: false,
+      questions: []
+    });
 
     rooms.set(code, room);
     await persistRoom(room);
-    return { code, playerId, room: publicRoom(room, playerId) };
+    return { code, playerId, sessionToken, room: publicRoom(room, playerId) };
   },
 
   async joinRoom(rawCode, rawName, socketId) {
@@ -462,16 +522,27 @@ export const gameStore = {
     assertUniqueNames([...[...room.players.values()].map((player) => player.name), name], 'Name');
 
     const playerId = crypto.randomUUID();
-    room.players.set(playerId, { id: playerId, name, socketId, submitted: false, questions: [] });
+    const sessionToken = newSessionToken();
+    room.players.set(playerId, {
+      id: playerId,
+      name,
+      sessionTokenHash: hashSessionToken(sessionToken),
+      socketId,
+      submitted: false,
+      questions: []
+    });
 
     await persistRoom(room);
-    return { code: room.code, playerId, room: publicRoom(room, playerId) };
+    return { code: room.code, playerId, sessionToken, room: publicRoom(room, playerId) };
   },
 
-  async reconnect(rawCode, playerId, socketId) {
+  async reconnect(rawCode, sessionToken, socketId) {
     const room = await ensureRoom(rawCode);
-    const player = room.players.get(playerId);
-    if (!player) throw new Error('Player not found');
+    const player = [...room.players.values()].find((entry) =>
+      tokenMatches(sessionToken, entry.sessionTokenHash)
+    );
+    if (!player) throw new Error('Saved session is invalid or expired. Rejoin the room.');
+    const playerId = player.id;
 
     const prevSocketId = player.socketId;
     player.socketId = socketId;
@@ -484,7 +555,7 @@ export const gameStore = {
     await persistRoom(room);
 
     const supersededSocketId = prevSocketId && prevSocketId !== socketId ? prevSocketId : null;
-    return { code: room.code, room: publicRoom(room, playerId), supersededSocketId };
+    return { code: room.code, playerId, room: publicRoom(room, playerId), supersededSocketId };
   },
 
   async submitQuestions(rawCode, playerId, questions) {
@@ -631,6 +702,7 @@ export const gameStore = {
     cell.status = 'active';
     const selectedByTeamId = room.turnTeamId;
     room.activeQuestion = {
+      id: crypto.randomUUID(),
       ownerPlayerId,
       ownerPlayerName: owner.name,
       selectedByTeamId,
@@ -642,7 +714,10 @@ export const gameStore = {
       attemptOrder: buildAttemptOrder(room.teams, selectedByTeamId, room.settings),
       attemptIndex: 0,
       attempts: [],
-      startedAt: Date.now()
+      startedAt: Date.now(),
+      deadlineAt: room.settings.timerSeconds > 0
+        ? Date.now() + room.settings.timerSeconds * 1000
+        : null
     };
     room.lastWrongAttempt = null;
 
@@ -704,6 +779,29 @@ export const gameStore = {
     return { room: publicRoom(room, hostPlayerId), result };
   },
 
+  async expireAttempt(rawCode, questionId, attemptIndex) {
+    const room = await ensureRoom(rawCode);
+    const active = room.activeQuestion;
+    if (
+      !active ||
+      active.id !== questionId ||
+      active.attemptIndex !== attemptIndex ||
+      !active.deadlineAt ||
+      Date.now() < active.deadlineAt
+    ) {
+      return null;
+    }
+
+    const teamId = currentAttemptTeamId(active, room.settings);
+    if (!teamId) return null;
+    const result = recordMiss(room, teamId, '', true);
+    if (room.activeQuestion) {
+      room.activeQuestion.deadlineAt = Date.now() + room.settings.timerSeconds * 1000;
+    }
+    await persistRoom(room);
+    return { code: room.code, result };
+  },
+
   async overrideLastIncorrect(rawCode, hostPlayerId) {
     const room = await ensureRoom(rawCode);
     if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can override answers');
@@ -739,7 +837,7 @@ export const gameStore = {
     rooms.set(newCode, room);
 
     if (roomRepository.isEnabled()) {
-      await roomRepository.renameRoom(oldCode, serializeRoom(room));
+      roomRepository.renameRoom(oldCode, serializeRoom(room));
     }
 
     return { oldCode, newCode, room: publicRoom(room, hostPlayerId) };
@@ -755,6 +853,7 @@ export const gameStore = {
     const wasHost = player.id === room.hostPlayerId;
     if (wasHost) room.hostDisconnectedAt = Date.now();
 
+    persistRoom(room);
     return { code: room.code, wasHost };
   },
 
@@ -768,11 +867,12 @@ export const gameStore = {
     const wasHost = player.id === room.hostPlayerId;
     if (wasHost) room.hostDisconnectedAt = Date.now();
 
+    await persistRoom(room);
     return { code: room.code, wasHost };
   },
 
   async maybePromoteHost(rawCode) {
-    const room = rooms.get(normalizeRoomCode(rawCode));
+    const room = rooms.get(validateRoomCode(rawCode));
     if (!room) return false;
 
     const host = room.players.get(room.hostPlayerId);
@@ -791,8 +891,42 @@ export const gameStore = {
   },
 
   roomViews(rawCode) {
-    const room = rooms.get(normalizeRoomCode(rawCode));
+    let code;
+    try {
+      code = validateRoomCode(rawCode);
+    } catch {
+      return [];
+    }
+    const room = rooms.get(code);
     if (!room) return [];
     return buildRoomViews(room);
+  },
+
+  activeTimer(rawCode) {
+    let code;
+    try {
+      code = validateRoomCode(rawCode);
+    } catch {
+      return null;
+    }
+    const active = rooms.get(code)?.activeQuestion;
+    if (!active?.deadlineAt) return null;
+    return {
+      code,
+      questionId: active.id,
+      attemptIndex: active.attemptIndex,
+      deadlineAt: active.deadlineAt
+    };
+  },
+
+  async pruneInactiveRooms(now = Date.now()) {
+    const cutoff = now - ROOM_RETENTION_MS;
+    const protectedCodes = [];
+    for (const [code, room] of rooms) {
+      const hasConnections = [...room.players.values()].some((player) => player.socketId);
+      if (hasConnections) protectedCodes.push(code);
+      else if (room.lastActivityAt < cutoff) rooms.delete(code);
+    }
+    await roomRepository.deleteExpiredRooms(new Date(cutoff).toISOString(), protectedCodes);
   }
 };

@@ -6,7 +6,12 @@ let audioContext = null;
 const getContext = () => {
   if (!audioContext) {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    audioContext = new AudioContextClass();
+    if (!AudioContextClass) return null;
+    try {
+      audioContext = new AudioContextClass();
+    } catch {
+      return null;
+    }
   }
   return audioContext;
 };
@@ -96,6 +101,7 @@ const startPad = (ctx) => {
 };
 
 export const useSound = (enabled) => {
+  const available = Boolean(window.AudioContext || window.webkitAudioContext);
   const [muted, setMuted] = useState(() => localStorage.getItem(MUTE_KEY) === 'true');
   const warmedRef = useRef(false);
   const stopPadRef = useRef(null);
@@ -105,6 +111,7 @@ export const useSound = (enabled) => {
     const warmUp = () => {
       warmedRef.current = true;
       const ctx = getContext();
+      if (!ctx) return;
       if (ctx.state === 'suspended') ctx.resume();
     };
     window.addEventListener('pointerdown', warmUp, { once: true });
@@ -122,6 +129,7 @@ export const useSound = (enabled) => {
       return undefined;
     }
     const ctx = getContext();
+    if (!ctx) return undefined;
     if (ctx.state === 'suspended') ctx.resume();
     stopPadRef.current = startPad(ctx);
     return () => {
@@ -144,11 +152,16 @@ export const useSound = (enabled) => {
       const voice = VOICES[name];
       if (!voice) return;
       const ctx = getContext();
+      if (!ctx) return;
       if (ctx.state === 'suspended') return;
-      voice(ctx);
+      try {
+        voice(ctx);
+      } catch {
+        // Audio is optional; browser audio failures must not interrupt gameplay.
+      }
     },
     [enabled, muted]
   );
 
-  return { muted, toggleMuted, play };
+  return { available, muted, toggleMuted, play };
 };
