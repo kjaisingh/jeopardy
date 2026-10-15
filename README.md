@@ -126,7 +126,7 @@ The public `/health` response reports whether persistence is enabled and whether
 
 `GET /health/persistence` performs one bounded, read-only Supabase query. It is disabled unless `KEEPALIVE_TOKEN` is configured and requires the exact header `Authorization: Bearer <KEEPALIVE_TOKEN>`. It never returns room data, database errors, or credentials.
 
-After deployment, schedule this endpoint every six hours with a free external scheduler such as [cron-job.org](https://cron-job.org/). Use a timeout of at least 60 seconds for Render cold starts, enable retries and failure notifications, and put the token in the authorization header—not the URL. These brief requests wake Render only long enough to probe Supabase; Render can sleep normally between requests.
+After deployment, schedule this endpoint every six hours with a free external scheduler such as [cron-job.org](https://cron-job.org/). On cron-job.org's free plan, use its maximum 30-second timeout, save responses in job history, and enable failure and recovery notifications. Render cold starts can exceed 30 seconds; if timeouts recur, use a scheduler with a longer timeout. Put the token in the authorization header—not the URL. These brief requests wake Render only long enough to probe Supabase; Render can sleep normally between requests.
 
 Verify the scheduler's execution history periodically: each run should return `200 {"ok":true}`, and `/health` should show a recent `persistence.lastSuccessAt`. A `401` means the authorization header is wrong; a `503` means the database probe failed. If Supabase has already paused, unpause it in the dashboard before retrying. A successful one-off probe does not prove that the recurring job is running.
 
