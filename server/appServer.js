@@ -358,7 +358,8 @@ export function createAppServer({
 
   const distDir = path.resolve(__dirname, '../dist');
   app.use(express.static(distDir));
-  app.get('*', (_req, res) => {
+  app.get('*', (req, res) => {
+    if (req.path.startsWith('/health/')) return res.sendStatus(404);
     res.sendFile(path.join(distDir, 'index.html'));
   });
 

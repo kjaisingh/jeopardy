@@ -54,6 +54,7 @@ test('health reports persistence state with security headers', async () => {
     assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
     assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
     assert.equal(response.headers.get('access-control-allow-origin'), 'http://localhost:3001');
+    assert.equal((await fetch(`${url}/health/persistence`)).status, 404);
   } finally {
     await server.stop();
   }
