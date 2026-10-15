@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { io as createClient } from 'socket.io-client';
 import { createAppServer } from './appServer.js';
+import { gameStore } from './gameStore.js';
 
 const SETTINGS = {
   mode: 'finite',
@@ -59,6 +60,12 @@ test('persistence health endpoint is hidden when no keepalive token is configure
     assert.equal(shallow.headers.get('referrer-policy'), 'no-referrer');
     assert.equal(store.probeCalls, 0);
 
+    const localAssetOrigin = await fetch(`${url}/health`, {
+      headers: { Origin: 'http://localhost:3001' }
+    });
+    assert.equal(localAssetOrigin.status, 200);
+    assert.equal(localAssetOrigin.headers.get('access-control-allow-origin'), 'http://localhost:3001');
+
     const response = await fetch(`${url}/health/persistence`);
     assert.equal(response.status, 404);
     assert.equal(response.headers.get('cache-control'), 'no-store');
@@ -110,6 +117,123 @@ test('persistence health endpoint reports an unavailable database', async () => 
     assert.deepEqual(await response.json(), { ok: false });
     assert.equal(store.probeCalls, 1);
   } finally {
+    await server.stop();
+  }
+});
+
+test('socket handlers distinguish resume from permanent lobby departure', async () => {
+  const server = createAppServer();
+  const address = await server.start(0);
+  const url = `http://127.0.0.1:${address.port}`;
+  const sockets = [];
+  try {
+    const host = await connect(url);
+    const guest = await connect(url);
+    sockets.push(host, guest);
+    const created = await request(host, 'room:create', { name: 'Host', settings: SETTINGS });
+    const joined = await request(guest, 'room:join', { code: created.code, name: 'Guest' });
+
+    assert.equal((await request(guest, 'room:leave')).ok, true);
+    assert.equal((await request(guest, 'room:reconnect', {
+      code: created.code, sessionToken: joined.sessionToken
+    })).ok, true);
+    assert.equal((await request(guest, 'room:leave')).ok, true);
+    assert.equal((await request(guest, 'room:forget', {
+      code: created.code, sessionToken: joined.sessionToken
+    })).ok, true);
+
+    const staleSession = await request(guest, 'room:forget', {
+      code: created.code, sessionToken: joined.sessionToken
+    });
+    assert.equal(staleSession.ok, false);
+    assert.equal((await request(guest, 'room:reconnect', {
+      code: created.code, sessionToken: joined.sessionToken
+    })).ok, false);
+    const replacement = await request(guest, 'room:join', { code: created.code, name: 'Guest' });
+    assert.equal(replacement.ok, true);
+  } finally {
+    sockets.forEach((socket) => socket.disconnect());
+    await server.stop();
+  }
+});
+
+test('forgetting a detached room cannot clear a newly joined socket session', async () => {
+  const server = createAppServer();
+  const address = await server.start(0);
+  const url = `http://127.0.0.1:${address.port}`;
+  const sockets = [];
+  try {
+    const oldHost = await connect(url);
+    const guest = await connect(url);
+    sockets.push(oldHost, guest);
+    const oldRoom = await request(oldHost, 'room:create', { name: 'Old Host', settings: SETTINGS });
+    const joined = await request(guest, 'room:join', { code: oldRoom.code, name: 'Guest' });
+    assert.equal((await request(guest, 'room:leave')).ok, true);
+
+    const newRoom = await request(guest, 'room:create', { name: 'New Host', settings: SETTINGS });
+    assert.equal(newRoom.ok, true);
+    assert.equal((await request(guest, 'room:forget', {
+      code: oldRoom.code, sessionToken: joined.sessionToken
+    })).ok, true);
+    assert.equal((await request(guest, 'questions:submit', {
+      questions: [{ prompt: 'A clue', answer: 'An answer', value: 100 }]
+    })).ok, true);
+  } finally {
+    sockets.forEach((socket) => socket.disconnect());
+    await server.stop();
+  }
+});
+
+test('a new player inherits hosting after the old host disconnected', async () => {
+  const server = createAppServer();
+  const address = await server.start(0);
+  const url = `http://127.0.0.1:${address.port}`;
+  const sockets = [];
+  try {
+    const host = await connect(url);
+    sockets.push(host);
+    const created = await request(host, 'room:create', { name: 'Host', settings: SETTINGS });
+    host.disconnect();
+    await new Promise((resolve) => setTimeout(resolve, 2 * gameStore.HOST_GRACE_MS));
+
+    const guest = await connect(url);
+    sockets.push(guest);
+    const joined = await request(guest, 'room:join', { code: created.code, name: 'Guest' });
+    assert.equal(joined.ok, true);
+    assert.equal(joined.room.hostPlayerId, joined.playerId);
+  } finally {
+    sockets.forEach((socket) => socket.disconnect());
+    await server.stop();
+  }
+});
+
+test('a player joining during host grace is promoted when grace expires', async () => {
+  const server = createAppServer();
+  const address = await server.start(0);
+  const url = `http://127.0.0.1:${address.port}`;
+  const sockets = [];
+  try {
+    const host = await connect(url);
+    sockets.push(host);
+    const created = await request(host, 'room:create', { name: 'Host', settings: SETTINGS });
+    host.disconnect();
+
+    const guest = await connect(url);
+    sockets.push(guest);
+    const promoted = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Host promotion timed out')), 2000);
+      guest.on('room:updated', (room) => {
+        if (room.hostPlayerId && room.hostPlayerId !== created.playerId) {
+          clearTimeout(timeout);
+          resolve(room);
+        }
+      });
+    });
+    const joined = await request(guest, 'room:join', { code: created.code, name: 'Guest' });
+    assert.equal(joined.ok, true);
+    assert.equal((await promoted).hostPlayerId, joined.playerId);
+  } finally {
+    sockets.forEach((socket) => socket.disconnect());
     await server.stop();
   }
 });
@@ -252,6 +376,7 @@ test('reconnect schedules a later host-promotion check', async () => {
     }),
     roomViews: () => [],
     activeTimer: () => null,
+    hostPromotionDelay: () => 10,
     maybePromoteHost: async () => {
       promotionChecks += 1;
       return false;

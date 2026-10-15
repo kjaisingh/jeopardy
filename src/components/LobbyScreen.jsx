@@ -38,6 +38,9 @@ export function LobbyScreen({
       <section className="card">
         <h2>Question Submission</h2>
         <p>Each player writes {room.settings.questionsPerPlayer} questions, one per point value.</p>
+        <p role="status">
+          {room.players.filter((player) => player.submitted).length} of {room.players.length} players ready
+        </p>
 
         {me?.submitted && !editingQuestions && (
           <div className="lobby-ready">

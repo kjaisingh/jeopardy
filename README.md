@@ -83,7 +83,7 @@ See [`.env.example`](.env.example) for a copyable template.
 | Variable | Required | Meaning |
 | --- | --- | --- |
 | `PORT` | No | Production server port. Defaults to `3001`. |
-| `CLIENT_URL` | Production | Browser origin allowed by CORS. |
+| `CLIENT_URL` | Production or custom origin | Browser origin allowed by CORS. Default local Vite and `npm start` origins are also allowed. |
 | `VITE_SERVER_URL` | Local only | Socket server used by the Vite client. |
 | `SUPABASE_URL` | No | Supabase project URL. |
 | `SUPABASE_SERVICE_ROLE_KEY` | No | Server-only key used for room snapshots. |
@@ -100,13 +100,15 @@ Room snapshots contain player-written questions, answers, and hashed resume toke
 
 Socket mutations use the identity bound to the authenticated connection. Client-supplied `playerId` or room-code fields cannot change the actor. Each socket can own only one room session. Requests also have strict payload limits, room-code validation, per-socket rate limiting, and safe acknowledgement handling. Production responses include a restrictive content security policy, frame denial, MIME sniffing protection, and a no-referrer policy.
 
-Browser sessions and question drafts live in `localStorage`. “Leave” removes both. “Go Home” detaches from live updates but keeps the resume token and drafts.
+Browser sessions and question drafts live in `localStorage`. “Go Home” disconnects from live updates but keeps the room slot, resume token, and drafts, so the player can return. “Leave” (or “Forget Saved Session” from Home) permanently removes a lobby player, frees their name and slot, and clears local drafts. After a game starts, leaving revokes the resume token but retains that player's past questions and team membership for game history; they are omitted from the next round. A player who forgets a session while offline only clears the browser immediately; server-side removal needs a successful connection and otherwise happens when room retention expires.
 
 ## Deployment
 
 [`render.yaml`](render.yaml) defines a single Render web service using Node 24 and shallow `/health` checks. For a new deployment, create a Render Blueprint from this repository. For the existing `Jeopardy` service, keep that service and update its environment variables; creating a second service is unnecessary.
 
-### One-time production rollout
+### Fresh deployment or recovery checklist
+
+The existing Render service and Supabase project have already been configured. Use this checklist for a new installation, credential rotation, or recovery; do not create a duplicate Render service for the existing app.
 
 1. Commit and push this repository so Render can deploy the current code.
 2. Unpause the existing Supabase project once if it is currently paused.
@@ -116,7 +118,7 @@ Browser sessions and question drafts live in `localStorage`. “Leave” removes
 6. Confirm `CLIENT_URL` matches the public Render URL, then redeploy the existing service.
 7. Configure and test the external keepalive job described below.
 
-Authentication changed from public player IDs to private resume tokens. Browsers holding sessions from the old deployment must rejoin once; newly saved sessions resume normally afterward.
+Browsers holding sessions from before private resume tokens were introduced must rejoin once; newly saved sessions resume normally afterward.
 
 The public `/health` response reports whether persistence is enabled and whether recent background writes failed. It never includes credentials or room data, and it does not query Supabase.
 
@@ -126,6 +128,8 @@ The public `/health` response reports whether persistence is enabled and whether
 
 After deployment, schedule this endpoint every six hours with a free external scheduler such as [cron-job.org](https://cron-job.org/). Use a timeout of at least 60 seconds for Render cold starts, enable retries and failure notifications, and put the token in the authorization header—not the URL. These brief requests wake Render only long enough to probe Supabase; Render can sleep normally between requests.
 
+Verify the scheduler's execution history periodically: each run should return `200 {"ok":true}`, and `/health` should show a recent `persistence.lastSuccessAt`. A `401` means the authorization header is wrong; a `503` means the database probe failed. If Supabase has already paused, unpause it in the dashboard before retrying. A successful one-off probe does not prove that the recurring job is running.
+
 [Supabase currently says](https://supabase.com/docs/guides/platform/free-project-pausing) a few user database requests per day are typically enough to avoid free-project inactivity pausing. This is best-effort, not an uptime guarantee; a scheduler outage or policy change can still allow pausing. Supabase Pro is the only formal no-pause option. A GitHub scheduled workflow is intentionally not used because GitHub can disable schedules after 60 days without repository activity on public repositories.
 
 ## Operational limits
@@ -133,6 +137,7 @@ After deployment, schedule this endpoint every six hours with a free external sc
 - Run exactly one app instance. Rooms live in process memory; horizontal scaling requires a shared Socket.IO adapter and coordinated room/timer ownership.
 - Without Supabase, a restart loses every room.
 - With Supabase, rooms survive normal restarts. Writes are coalesced, timeout-bounded, and retried with exponential backoff; an abrupt process kill can still lose the latest in-memory mutation.
+- Room snapshots are not backups. Export the Supabase database regularly to a secure location you control, especially before schema or plan changes. The free tier does not guarantee disaster recovery.
 - Inactive rooms expire after the configured retention period. Rooms with connected players are not pruned.
 - A free Render service may sleep and cold-start. The keepalive request wakes it briefly without keeping it continuously active.
 - Media questions and AI-assisted question generation are intentionally out of scope because they require storage, moderation, or paid model decisions.

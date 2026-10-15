@@ -35,13 +35,13 @@ const setupGame = async ({
     timerSeconds,
     questionsPerPlayer
   });
-  const players = [{ id: host.playerId, name: 'Host', socketId: hostSocketId }];
+  const players = [{ id: host.playerId, name: 'Host', socketId: hostSocketId, sessionToken: host.sessionToken }];
 
   for (let index = 1; index < playerCount; index += 1) {
     const name = `Player${index}`;
     const socketId = `socket-${index}-${host.code}`;
     const joined = await gameStore.joinRoom(host.code, name, socketId);
-    players.push({ id: joined.playerId, name, socketId });
+    players.push({ id: joined.playerId, name, socketId, sessionToken: joined.sessionToken });
   }
 
   for (const player of players) {
@@ -505,6 +505,7 @@ test('gameStore: host disconnect auto-promotes the longest-connected player afte
 
   const disconnectResult = gameStore.disconnect('socket-promote-host');
   assert.deepEqual(disconnectResult, { code: host.code, wasHost: true });
+  assert.ok(gameStore.hostPromotionDelay(host.code) <= gameStore.HOST_GRACE_MS);
 
   const promotedTooSoon = await gameStore.maybePromoteHost(host.code);
   assert.equal(promotedTooSoon, false);
@@ -513,6 +514,7 @@ test('gameStore: host disconnect auto-promotes the longest-connected player afte
 
   const promoted = await gameStore.maybePromoteHost(host.code);
   assert.equal(promoted, true);
+  assert.equal(gameStore.hostPromotionDelay(host.code), null);
 
   const view = gameStore.roomViews(host.code).find((entry) => entry.socketId === 'socket-promote-p1');
   assert.equal(view.room.hostPlayerId, p1.playerId);
@@ -579,6 +581,80 @@ test('gameStore: leaveRoom is a no-op for an already-disconnected or unknown pla
 
   const unknownResult = await gameStore.leaveRoom(host.code, 'not-a-real-player-id');
   assert.equal(unknownResult, null);
+});
+
+test('gameStore: permanent lobby leave releases name and submission slot', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-forget-host', DEFAULT_SETTINGS);
+  const guest = await gameStore.joinRoom(host.code, 'Guest', 'socket-forget-guest');
+  await gameStore.submitQuestions(host.code, host.playerId, questionsFor('Host'));
+
+  await gameStore.removePlayer(host.code, guest.playerId);
+  const view = gameStore.roomViews(host.code).find((entry) => entry.socketId === 'socket-forget-host');
+  assert.equal(view.room.players.length, 1);
+  await assert.rejects(
+    gameStore.reconnect(host.code, guest.sessionToken, 'socket-forget-guest-new'),
+    /invalid or expired/
+  );
+  const replacement = await gameStore.joinRoom(host.code, 'Guest', 'socket-forget-guest-2');
+  assert.equal(replacement.room.players.some((player) => player.name === 'Guest'), true);
+  await gameStore.removePlayer(host.code, replacement.playerId);
+  await gameStore.advanceToTeamSetup(host.code, host.playerId);
+});
+
+test('gameStore: permanent host leave immediately promotes connected guest', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-exit-host', DEFAULT_SETTINGS);
+  const guest = await gameStore.joinRoom(host.code, 'Guest', 'socket-exit-guest');
+  const result = await gameStore.removePlayer(host.code, host.playerId);
+  assert.deepEqual(result, { code: host.code, wasHost: true });
+  const view = gameStore.roomViews(host.code).find((entry) => entry.socketId === 'socket-exit-guest');
+  assert.equal(view.room.hostPlayerId, guest.playerId);
+  assert.equal(view.room.players.length, 1);
+  assert.equal(view.room.events.at(-1).type, 'host-changed');
+});
+
+test('gameStore: first player joining a vacated lobby becomes host', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-empty-host', DEFAULT_SETTINGS);
+  await gameStore.removePlayer(host.code, host.playerId);
+  const joined = await gameStore.joinRoom(host.code, 'New Host', 'socket-empty-new-host');
+  assert.equal(joined.room.hostPlayerId, joined.playerId);
+  assert.equal(joined.room.players.length, 1);
+});
+
+test('gameStore: reconnecting player inherits an otherwise empty host seat', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-vacant-host', DEFAULT_SETTINGS);
+  const guest = await gameStore.joinRoom(host.code, 'Guest', 'socket-vacant-guest');
+  await gameStore.leaveRoom(host.code, guest.playerId);
+  await gameStore.removePlayer(host.code, host.playerId);
+  const reconnected = await gameStore.reconnect(host.code, guest.sessionToken, 'socket-vacant-return');
+  assert.equal(reconnected.room.hostPlayerId, guest.playerId);
+});
+
+test('gameStore: detached player can forget session without reconnecting', async () => {
+  const host = await gameStore.createRoom('Host', 'socket-detached-host', DEFAULT_SETTINGS);
+  const guest = await gameStore.joinRoom(host.code, 'Guest', 'socket-detached-guest');
+  await gameStore.leaveRoom(host.code, guest.playerId);
+  await gameStore.removeDetachedPlayer(host.code, guest.sessionToken);
+  const view = gameStore.roomViews(host.code).find((entry) => entry.socketId === 'socket-detached-host');
+  assert.equal(view.room.players.length, 1);
+  await assert.rejects(gameStore.removeDetachedPlayer(host.code, guest.sessionToken), /invalid/);
+});
+
+test('gameStore: permanent exit after setup retains player history but revokes resume', async () => {
+  const { code, players } = await setupGame();
+  const guest = players[1];
+  await gameStore.removePlayer(code, guest.id);
+  const view = gameStore.roomViews(code).find((entry) => entry.socketId === players[0].socketId);
+  assert.equal(view.room.players.find((player) => player.id === guest.id).isConnected, false);
+  assert.equal(view.room.teams.some((team) => team.playerIds.includes(guest.id)), true);
+  await assert.rejects(
+    gameStore.reconnect(code, guest.sessionToken, 'socket-exited-game'),
+    /invalid or expired/
+  );
+  await passAllQuestions(code, players[0].id, view.room);
+  const restarted = await gameStore.restartGame(code, players[0].id);
+  assert.equal(restarted.room.players.some((player) => player.id === guest.id), false);
+  const rejoined = await gameStore.joinRoom(restarted.newCode, guest.name, 'socket-returned-game');
+  assert.equal(rejoined.room.players.some((player) => player.id === rejoined.playerId), true);
 });
 
 // --- Duplicate-session supersede ------------------------------------------------

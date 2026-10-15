@@ -27,7 +27,13 @@ export function createAppServer({
 } = {}) {
   const app = express();
   const httpServer = createServer(app);
-  const allowedOrigins = [process.env.CLIENT_URL, 'http://localhost:5173'].filter(Boolean);
+  const localPort = positiveIntegerFromEnv('PORT', 3001);
+  const allowedOrigins = [
+    process.env.CLIENT_URL,
+    'http://localhost:5173',
+    `http://localhost:${localPort}`,
+    `http://127.0.0.1:${localPort}`
+  ].filter(Boolean);
   const timers = new Map();
   const hostPromotionTimers = new Map();
 
@@ -120,10 +126,17 @@ export function createAppServer({
 
   const scheduleHostPromotion = (code) => {
     clearTimeout(hostPromotionTimers.get(code));
+    hostPromotionTimers.delete(code);
+    const delay = store.hostPromotionDelay(code);
+    if (delay === null) return;
     const timeout = setTimeout(async () => {
       hostPromotionTimers.delete(code);
-      if (await store.maybePromoteHost(code)) sendRoom(code);
-    }, store.HOST_GRACE_MS);
+      try {
+        if (await store.maybePromoteHost(code)) sendRoom(code);
+      } catch (error) {
+        console.error('Host promotion failed:', error);
+      }
+    }, delay);
     timeout.unref?.();
     hostPromotionTimers.set(code, timeout);
   };
@@ -204,6 +217,7 @@ export function createAppServer({
     onRequest(socket, 'room:join', async ({ code, name }) => {
       const result = await establishSession(socket, () => store.joinRoom(code, name, socket.id));
       sendRoom(result.code);
+      scheduleHostPromotion(result.code);
       return {
         code: result.code,
         playerId: result.playerId,
@@ -335,6 +349,26 @@ export function createAppServer({
       if (result) {
         sendRoom(result.code);
         if (result.wasHost) scheduleHostPromotion(result.code);
+      }
+      return {};
+    });
+
+    onRequest(socket, 'room:forget', async ({ code, sessionToken }) => {
+      const detachedLeave = code !== undefined || sessionToken !== undefined;
+      let result;
+      if (detachedLeave) {
+        result = await store.removeDetachedPlayer(code, sessionToken);
+      } else {
+        const actor = actorFor(socket);
+        result = await store.removePlayer(actor.code, actor.playerId);
+        socket.data.session = null;
+      }
+      if (result) {
+        if (result.wasHost) {
+          clearTimeout(hostPromotionTimers.get(result.code));
+          hostPromotionTimers.delete(result.code);
+        }
+        sendRoom(result.code);
       }
       return {};
     });

@@ -89,6 +89,16 @@ async function main() {
     await Promise.all(players.map((page) => page.locator('.room-code').waitFor()));
     log('both players joined, room state in sync');
 
+    await p2.getByRole('button', { name: 'Go Home' }).click();
+    await p2.getByRole('button', { name: 'Forget Saved Session' }).click();
+    await host.locator('.players-list .pill').filter({ hasText: 'Player Two' }).waitFor({ state: 'detached' });
+    const rejoinCard = p2.locator('.home-card').filter({ hasText: 'Join a Game' });
+    await rejoinCard.getByLabel('Room code').fill(roomCode);
+    await rejoinCard.getByLabel('Your name').fill('Player Two');
+    await rejoinCard.getByRole('button', { name: 'Join Game' }).click();
+    await p2.locator('.room-code').waitFor();
+    log('permanent leave removes lobby slot and allows same-name rejoin');
+
     // --- detach/resume and local draft recovery ---
     await host.getByRole('button', { name: 'Go Home' }).click();
     await host.getByRole('button', { name: 'Resume Previous Game' }).click();

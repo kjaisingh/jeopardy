@@ -424,7 +424,11 @@ const resetForNewRound = (room, nextCode) => {
   room.eventSeq = 0;
   room.history = [];
 
-  room.players.forEach((player) => {
+  room.players.forEach((player, playerId) => {
+    if (!player.sessionTokenHash) {
+      room.players.delete(playerId);
+      return;
+    }
     player.submitted = false;
     player.questions = [];
   });
@@ -532,6 +536,12 @@ export const gameStore = {
       questions: []
     });
 
+    if (!room.hostPlayerId) {
+      room.hostPlayerId = playerId;
+      room.hostDisconnectedAt = null;
+    } else {
+      await this.maybePromoteHost(room.code);
+    }
     await persistRoom(room);
     return { code: room.code, playerId, sessionToken, room: publicRoom(room, playerId) };
   },
@@ -547,6 +557,7 @@ export const gameStore = {
     const prevSocketId = player.socketId;
     player.socketId = socketId;
 
+    if (!room.hostPlayerId) room.hostPlayerId = playerId;
     if (playerId === room.hostPlayerId) {
       room.hostDisconnectedAt = null;
     }
@@ -869,6 +880,47 @@ export const gameStore = {
 
     await persistRoom(room);
     return { code: room.code, wasHost };
+  },
+
+  async removePlayer(rawCode, playerId, allowDetached = false) {
+    const room = await ensureRoom(rawCode);
+    const player = room.players.get(playerId);
+    if (!player || (!player.socketId && !allowDetached)) return null;
+
+    const wasHost = player.id === room.hostPlayerId;
+    if (room.phase === 'lobby') {
+      room.players.delete(playerId);
+    } else {
+      player.socketId = null;
+      player.sessionTokenHash = null;
+    }
+
+    if (wasHost) {
+      const nextHost = [...room.players.values()].find((entry) => entry.socketId);
+      room.hostPlayerId = nextHost?.id ?? null;
+      room.hostDisconnectedAt = null;
+      if (nextHost) pushEvent(room, { type: 'host-changed', newHostName: nextHost.name });
+    }
+
+    await persistRoom(room);
+    return { code: room.code, wasHost };
+  },
+
+  async removeDetachedPlayer(rawCode, sessionToken) {
+    const room = await ensureRoom(rawCode);
+    const player = [...room.players.values()].find((entry) =>
+      tokenMatches(sessionToken, entry.sessionTokenHash)
+    );
+    if (!player || player.socketId) throw new Error('Saved session is invalid or still active.');
+    return this.removePlayer(room.code, player.id, true);
+  },
+
+  hostPromotionDelay(rawCode) {
+    const room = rooms.get(validateRoomCode(rawCode));
+    if (!room?.hostDisconnectedAt) return null;
+    const host = room.players.get(room.hostPlayerId);
+    if (host?.socketId) return null;
+    return Math.max(0, HOST_GRACE_MS - (Date.now() - room.hostDisconnectedAt));
   },
 
   async maybePromoteHost(rawCode) {

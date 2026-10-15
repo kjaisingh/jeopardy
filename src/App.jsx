@@ -68,6 +68,8 @@ function App() {
   const busyRef = useRef('');
   const sessionRef = useRef(session);
   const suppressAutoResumeRef = useRef(suppressAutoResume);
+  const pendingDetachRef = useRef(Promise.resolve());
+  const pendingLeaveRef = useRef(Promise.resolve());
 
   useEffect(() => {
     sessionRef.current = session;
@@ -385,16 +387,23 @@ function App() {
   };
 
   const leaveCompletely = () => {
-    if (session?.code) {
-      call('room:leave', {}).catch(() => {});
+    suppressAutoResumeRef.current = true;
+    if (session?.code && !superseded) {
+      const savedSession = session;
+      const wasInRoom = Boolean(room);
+      pendingLeaveRef.current = pendingDetachRef.current
+        .then(() => call('room:forget', wasInRoom
+          ? {}
+          : { code: savedSession.code, sessionToken: savedSession.sessionToken }))
+        .catch(() => {});
     }
     clearDrafts(session);
     resetToHome();
-    setSuppressAutoResume(false);
     setSession(null);
   };
 
   const createRoom = () => run('create', async () => {
+    await pendingLeaveRef.current;
     suppressAutoResumeRef.current = false;
     setSuppressAutoResume(false);
     const response = await call('room:create', {
@@ -417,6 +426,7 @@ function App() {
   });
 
   const joinRoom = () => run('join', async () => {
+    await pendingLeaveRef.current;
     suppressAutoResumeRef.current = false;
     setSuppressAutoResume(false);
     const response = await call('room:join', { code: joinCode.trim().toUpperCase(), name: joinName.trim() });
@@ -440,6 +450,7 @@ function App() {
   };
 
   const resumePreviousGame = () => run('resume', async () => {
+    await pendingDetachRef.current;
     await reconnectSession(session);
     suppressAutoResumeRef.current = false;
     setSuppressAutoResume(false);
@@ -630,7 +641,7 @@ function App() {
   const goHome = () => {
     suppressAutoResumeRef.current = true;
     setSuppressAutoResume(true);
-    call('room:leave', {}).catch(() => {});
+    pendingDetachRef.current = call('room:leave', {}).catch(() => {});
     resetToHome();
   };
 
