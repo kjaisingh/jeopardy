@@ -465,10 +465,6 @@ export const gameStore = {
     return roomRepository.getStatus();
   },
 
-  async probePersistence() {
-    return roomRepository.probe();
-  },
-
   async flushPersistence() {
     await roomRepository.flush();
   },
