@@ -147,7 +147,7 @@ function App() {
     if (!nextSession?.code || !nextSession?.playerId) return false;
     if (!nextSession.sessionToken) {
       setSession(null);
-      setError('Your saved session uses an older format. Rejoin the room to continue.');
+      setError('Your saved session is invalid. Rejoin the room to continue.');
       return false;
     }
     try {
