@@ -1,7 +1,6 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
-import { createHash, timingSafeEqual } from 'node:crypto';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -14,16 +13,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RATE_WINDOW_MS = 10_000;
 const RATE_LIMIT = 120;
 
-const tokensMatch = (actual, expected) => {
-  if (typeof actual !== 'string') return false;
-  const actualDigest = createHash('sha256').update(actual).digest();
-  const expectedDigest = createHash('sha256').update(expected).digest();
-  return timingSafeEqual(actualDigest, expectedDigest);
-};
-
 export function createAppServer({
-  store = gameStore,
-  keepaliveToken = process.env.KEEPALIVE_TOKEN
+  store = gameStore
 } = {}) {
   const app = express();
   const httpServer = createServer(app);
@@ -73,24 +64,6 @@ export function createAppServer({
       persistence: store.persistenceStatus()
     });
   });
-  app.get('/health/persistence', async (req, res) => {
-    res.set('Cache-Control', 'no-store');
-    if (!keepaliveToken) return res.status(404).json({ ok: false });
-
-    const expectedAuthorization = `Bearer ${keepaliveToken}`;
-    if (!tokensMatch(req.get('authorization'), expectedAuthorization)) {
-      return res.status(401).json({ ok: false });
-    }
-
-    try {
-      const ok = await store.probePersistence();
-      return res.status(ok ? 200 : 503).json({ ok });
-    } catch (error) {
-      console.error('Unexpected persistence probe failure:', error);
-      return res.status(503).json({ ok: false });
-    }
-  });
-
   const io = new Server(httpServer, {
     cors: { origin: corsOrigin, credentials: true },
     maxHttpBufferSize: 64 * 1024,

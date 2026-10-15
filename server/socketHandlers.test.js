@@ -28,94 +28,32 @@ const connect = (url) =>
     socket.once('connect_error', reject);
   });
 
-const createProbeStore = (probeResult = true) => {
-  let probeCalls = 0;
-  return {
+test('health reports persistence state with security headers', async () => {
+  const store = {
     persistenceEnabled: () => true,
     persistenceStatus: () => ({ pendingWrites: 0, lastSuccessAt: null, lastErrorAt: null }),
-    probePersistence: async () => {
-      probeCalls += 1;
-      return probeResult;
-    },
     pruneInactiveRooms: async () => {},
-    flushPersistence: async () => {},
-    get probeCalls() {
-      return probeCalls;
-    }
+    flushPersistence: async () => {}
   };
-};
-
-test('persistence health endpoint is hidden when no keepalive token is configured', async () => {
-  const store = createProbeStore();
-  const server = createAppServer({ store, keepaliveToken: '' });
+  const server = createAppServer({ store });
   const address = await server.start(0);
   const url = `http://127.0.0.1:${address.port}`;
 
   try {
-    const shallow = await fetch(`${url}/health`);
-    assert.equal(shallow.status, 200);
-    assert.match(shallow.headers.get('content-security-policy'), /frame-ancestors 'none'/);
-    assert.equal(shallow.headers.get('x-frame-options'), 'DENY');
-    assert.equal(shallow.headers.get('x-content-type-options'), 'nosniff');
-    assert.equal(shallow.headers.get('referrer-policy'), 'no-referrer');
-    assert.equal(store.probeCalls, 0);
-
-    const localAssetOrigin = await fetch(`${url}/health`, {
+    const response = await fetch(`${url}/health`, {
       headers: { Origin: 'http://localhost:3001' }
     });
-    assert.equal(localAssetOrigin.status, 200);
-    assert.equal(localAssetOrigin.headers.get('access-control-allow-origin'), 'http://localhost:3001');
-
-    const response = await fetch(`${url}/health/persistence`);
-    assert.equal(response.status, 404);
-    assert.equal(response.headers.get('cache-control'), 'no-store');
-    assert.deepEqual(await response.json(), { ok: false });
-    assert.equal(store.probeCalls, 0);
-  } finally {
-    await server.stop();
-  }
-});
-
-test('persistence health endpoint authenticates before probing Supabase', async () => {
-  const store = createProbeStore();
-  const server = createAppServer({ store, keepaliveToken: 'test-keepalive-token' });
-  const address = await server.start(0);
-  const url = `http://127.0.0.1:${address.port}`;
-
-  try {
-    const missing = await fetch(`${url}/health/persistence`);
-    assert.equal(missing.status, 401);
-
-    const wrong = await fetch(`${url}/health/persistence`, {
-      headers: { Authorization: 'Bearer wrong-token' }
-    });
-    assert.equal(wrong.status, 401);
-    assert.equal(store.probeCalls, 0);
-
-    const response = await fetch(`${url}/health/persistence`, {
-      headers: { Authorization: 'Bearer test-keepalive-token' }
-    });
     assert.equal(response.status, 200);
-    assert.equal(response.headers.get('cache-control'), 'no-store');
-    assert.deepEqual(await response.json(), { ok: true });
-    assert.equal(store.probeCalls, 1);
-  } finally {
-    await server.stop();
-  }
-});
-
-test('persistence health endpoint reports an unavailable database', async () => {
-  const store = createProbeStore(false);
-  const server = createAppServer({ store, keepaliveToken: 'test-keepalive-token' });
-  const address = await server.start(0);
-
-  try {
-    const response = await fetch(`http://127.0.0.1:${address.port}/health/persistence`, {
-      headers: { Authorization: 'Bearer test-keepalive-token' }
+    assert.deepEqual(await response.json(), {
+      ok: true,
+      persistenceEnabled: true,
+      persistence: { pendingWrites: 0, lastSuccessAt: null, lastErrorAt: null }
     });
-    assert.equal(response.status, 503);
-    assert.deepEqual(await response.json(), { ok: false });
-    assert.equal(store.probeCalls, 1);
+    assert.match(response.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+    assert.equal(response.headers.get('x-frame-options'), 'DENY');
+    assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
+    assert.equal(response.headers.get('access-control-allow-origin'), 'http://localhost:3001');
   } finally {
     await server.stop();
   }

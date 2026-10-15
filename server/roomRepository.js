@@ -190,13 +190,6 @@ export function createRoomRepository({
       return Boolean(result.data);
     },
 
-    async probe() {
-      const result = await safeCall('probe persistence', null, (signal) =>
-        supabase.from('rooms').select('code').limit(1).abortSignal(signal)
-      );
-      return result.ok;
-    },
-
     saveRoom(roomState) {
       enqueue(roomState);
     },
