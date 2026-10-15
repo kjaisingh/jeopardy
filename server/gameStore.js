@@ -17,7 +17,6 @@ const makeCode = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 6);
 const MAX_EVENTS = 30;
 const HOST_GRACE_MS = positiveIntegerFromEnv('HOST_GRACE_MS', 30000);
 const ROOM_RETENTION_MS = positiveNumberFromEnv('ROOM_RETENTION_HOURS', 24) * 60 * 60 * 1000;
-const STATE_VERSION = 2;
 
 const rooms = new Map();
 const roomLoads = new Map();
@@ -52,7 +51,6 @@ const toStoredPlayer = (player) => ({
 });
 
 const serializeRoom = (room) => ({
-  schemaVersion: STATE_VERSION,
   code: room.code,
   hostPlayerId: room.hostPlayerId,
   hostDisconnectedAt: room.hostDisconnectedAt,
