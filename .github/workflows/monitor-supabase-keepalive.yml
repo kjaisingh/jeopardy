@@ -1,0 +1,46 @@
+name: Supabase keepalive monitor
+
+on:
+  schedule:
+    - cron: '45 4,10,16,22 * * *'
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: Read the badge without checking the six-hour schedule
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+concurrency:
+  group: supabase-keepalive-monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+      - name: Test badge checker
+        run: node --test .github/scripts/check-cron-job-badge.test.mjs
+      - name: Check cron-job.org status badge
+        env:
+          JOB_NAME: Jeopardy
+          CRON_JOB_ID: '8653167'
+          CRON_JOB_MINUTE: '0'
+          KEEPALIVE_ISSUE_NUMBER: '5'
+          CRON_JOB_BADGE_URL: ${{ secrets.CRON_JOB_BADGE_URL }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if [[ '${{ inputs.baseline }}' == 'true' ]]; then
+            node .github/scripts/check-cron-job-badge.mjs --baseline
+          else
+            node .github/scripts/check-cron-job-badge.mjs
+          fi

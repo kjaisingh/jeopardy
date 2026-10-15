@@ -7,7 +7,7 @@ export default [
   { ignores: ['dist/**', 'node_modules/**'] },
   js.configs.recommended,
   {
-    files: ['server/**/*.js', 'e2e/**/*.js', '*.js'],
+    files: ['server/**/*.js', 'e2e/**/*.js', '.github/scripts/**/*.{js,mjs}', '*.js'],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',
