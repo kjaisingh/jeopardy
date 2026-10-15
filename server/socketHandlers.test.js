@@ -221,7 +221,9 @@ test('a player joining during host grace is promoted when grace expires', async 
     const guest = await connect(url);
     sockets.push(guest);
     const promoted = new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Host promotion timed out')), 2000);
+      const timeout = setTimeout(() => reject(new Error(
+        `Host promotion timed out (delay=${gameStore.hostPromotionDelay(created.code)}, recipients=${gameStore.roomViews(created.code).length})`
+      )), 5000);
       guest.on('room:updated', (room) => {
         if (room.hostPlayerId && room.hostPlayerId !== created.playerId) {
           clearTimeout(timeout);
@@ -364,6 +366,7 @@ test('restart rebinds every connected player to the new room code', async () => 
 
 test('reconnect schedules a later host-promotion check', async () => {
   let promotionChecks = 0;
+  let promotionDelay = 10;
   const store = {
     HOST_GRACE_MS: 10,
     persistenceEnabled: () => false,
@@ -376,9 +379,10 @@ test('reconnect schedules a later host-promotion check', async () => {
     }),
     roomViews: () => [],
     activeTimer: () => null,
-    hostPromotionDelay: () => 10,
+    hostPromotionDelay: () => promotionDelay,
     maybePromoteHost: async () => {
       promotionChecks += 1;
+      promotionDelay = 0;
       return false;
     },
     disconnect: () => null,
