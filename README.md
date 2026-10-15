@@ -40,7 +40,6 @@ Jeopardy is a private, real-time game where players write the questions and play
 
 3. For durable rooms, create a Supabase project, run [`supabase/schema.sql`](supabase/schema.sql) in its SQL Editor, and set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in `.env`.
 4. Deploy a single instance with the [Render Blueprint](render.yaml). Set `CLIENT_URL` to its public HTTPS origin and add the Supabase values if using persistence.
-5. To reduce free-project inactivity pauses, set a server-only `KEEPALIVE_TOKEN` and schedule an authenticated request to `/health/persistence` every six hours.
 
 ## Feature backlog
 
@@ -48,4 +47,4 @@ Jeopardy is a private, real-time game where players write the questions and play
 - Record game events and automate database backups for stronger recovery.
 - Add a spectator view and reusable or imported question packs.
 - Support image and audio questions with upload controls.
-- Add room health metrics and alerts for failed persistence writes.
+- Alert hosts when room persistence fails.

@@ -133,6 +133,7 @@ export function createAppServer({
       hostPromotionTimers.delete(code);
       try {
         if (await store.maybePromoteHost(code)) sendRoom(code);
+        else if (store.hostPromotionDelay(code) > 0) scheduleHostPromotion(code);
       } catch (error) {
         console.error('Host promotion failed:', error);
       }
