@@ -10,6 +10,55 @@ import {
 } from './validate.js';
 import { gameStore } from './gameStore.js';
 
+test('stale actions never change the next team or question', async () => {
+  const { code, hostPlayerId } = await setupGame();
+  const selected = await gameStore.selectQuestion(code, hostPlayerId, hostPlayerId, 100);
+  const context = { questionId: selected.activeQuestion.id, attemptIndex: 0 };
+  await gameStore.skipCurrentTeam(code, hostPlayerId, context);
+  const before = structuredClone(gameStore.roomViews(code));
+  for (const action of [
+    () => gameStore.submitAttempt(code, hostPlayerId, 'Host-answer-100', context),
+    () => gameStore.skipCurrentTeam(code, hostPlayerId, context),
+    () => gameStore.overrideLastIncorrect(code, hostPlayerId, context),
+    () => gameStore.passActiveQuestion(code, hostPlayerId, context)
+  ]) await assert.rejects(action, /turn changed/);
+  assert.deepEqual(gameStore.roomViews(code), before);
+  await gameStore.passActiveQuestion(code, hostPlayerId);
+  await gameStore.selectQuestion(code, hostPlayerId, hostPlayerId, 200);
+  await assert.rejects(() => gameStore.passActiveQuestion(code, hostPlayerId, context), /turn changed/);
+});
+
+test('deadline rejects an answer before the timer callback and expires only once', async () => {
+  const { code, hostPlayerId } = await setupGame({ timerSeconds: 1 });
+  const selected = await gameStore.selectQuestion(code, hostPlayerId, hostPlayerId, 100);
+  const context = { questionId: selected.activeQuestion.id, attemptIndex: 0 };
+  const realNow = Date.now;
+  Date.now = () => selected.activeQuestion.deadlineAt;
+  try {
+    await assert.rejects(() => gameStore.submitAttempt(code, hostPlayerId, 'Host-answer-100', context), /Time expired/);
+    assert.equal(await gameStore.expireAttempt(code, context.questionId, 0), null);
+    const room = gameStore.roomViews(code)[0].room;
+    assert.equal(room.activeQuestion.attemptIndex, 1);
+    assert.equal(room.activeQuestion.attempts.length, 1);
+    assert.ok(room.teams.every((team) => team.score === 0));
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('concurrent restarts create exactly one new room', async () => {
+  const { code, hostPlayerId } = await setupGame({ playerCount: 1, questionsPerPlayer: 1 });
+  await gameStore.selectQuestion(code, hostPlayerId, hostPlayerId, 100);
+  await gameStore.passActiveQuestion(code, hostPlayerId);
+  const results = await Promise.allSettled([
+    gameStore.restartGame(code, hostPlayerId), gameStore.restartGame(code, hostPlayerId)
+  ]);
+  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+  const restarted = results.find((result) => result.status === 'fulfilled').value;
+  assert.equal(gameStore.roomViews(code).length, 0);
+  assert.equal(gameStore.roomViews(restarted.newCode)[0].room.phase, 'lobby');
+});
+
 const DEFAULT_SETTINGS = { mode: 'finite', rounds: 1, dailyDouble: false, timerSeconds: 0, questionsPerPlayer: 5 };
 
 const questionsFor = (label, count = 5) =>

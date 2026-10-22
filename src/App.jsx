@@ -588,18 +588,23 @@ function App() {
   const submitAttempt = () =>
     run('attempt', async () => {
       const answer = activeAnswerInput;
+      await call('question:attempt', { answer, ...attemptContext() });
       setActiveAnswerInput('');
-      await call('question:attempt', { answer });
     });
 
+  const attemptContext = () => ({
+    questionId: activeQuestion?.id,
+    attemptIndex: activeQuestion?.attemptIndex
+  });
+
   const advanceTeam = () =>
-    run('skip', () => call('question:skip', {}));
+    run('skip', () => call('question:skip', attemptContext()));
 
   const overrideIncorrect = () =>
-    run('override', () => call('question:override', {}));
+    run('override', () => call('question:override', attemptContext()));
 
   const closeQuestion = () =>
-    run('pass', () => call('question:pass', {}));
+    run('pass', () => call('question:pass', attemptContext()));
 
   const kickPlayer = (targetPlayerId, targetName) => {
     if (!window.confirm(`Remove ${targetName} from the game?`)) return undefined;

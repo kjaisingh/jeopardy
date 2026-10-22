@@ -71,6 +71,37 @@ const createFakeSupabase = (initialOutcomes = []) => {
 
 const quietLogger = { warn() {} };
 
+test('rename retires an old failed write instead of recreating its row', async () => {
+  const supabase = createFakeSupabase([{ data: null, error: new Error('offline') }]);
+  const repository = createRoomRepository({ supabase, retryBaseMs: 10000, logger: quietLogger });
+  repository.saveRoom({ code: 'OLD234', version: 1 });
+  await waitFor(() => repository.getStatus().retryScheduledAt);
+  repository.renameRoom('OLD234', { code: 'NEW234', version: 2 });
+  await repository.flush();
+  assert.deepEqual(supabase.calls.filter((call) => call.operation === 'upsert')
+    .map((call) => call.payload.code), ['OLD234', 'NEW234']);
+  assert.equal(repository.getStatus().pendingWrites, 0);
+});
+
+test('rename during an in-flight failure retains only the latest code and snapshot', async () => {
+  let release;
+  const supabase = createFakeSupabase([() => new Promise((resolve) => { release = resolve; })]);
+  const repository = createRoomRepository({ supabase, logger: quietLogger });
+  repository.saveRoom({ code: 'OLD234', version: 1 });
+  await waitFor(() => release);
+  assert.equal(repository.getStatus().pendingWrites, 1);
+  repository.renameRoom('OLD234', { code: 'MID234', version: 2 });
+  repository.renameRoom('MID234', { code: 'NEW234', version: 3 });
+  repository.saveRoom({ code: 'NEW234', version: 4 });
+  release({ data: null, error: new Error('offline') });
+  await repository.flush();
+  assert.deepEqual(supabase.calls.filter((call) => call.operation === 'upsert')
+    .map((call) => [call.payload.code, call.payload.state.version]), [['OLD234', 1], ['NEW234', 4]]);
+  assert.deepEqual(supabase.calls.filter((call) => call.operation === 'delete')
+    .map((call) => call.eq[1]), ['OLD234', 'MID234']);
+  assert.equal(repository.getStatus().pendingWrites, 0);
+});
+
 const waitFor = async (predicate, timeoutMs = 500) => {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {

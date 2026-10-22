@@ -23,6 +23,8 @@ export function createRoomRepository({
     positiveInteger(retryMaxMs, DEFAULT_RETRY_MAX_MS)
   );
   const pending = new Map();
+  const inFlight = new Map();
+  const retired = new Set();
   let drainPromise = null;
   let retryTimer = null;
   let retryScheduledAt = null;
@@ -65,7 +67,7 @@ export function createRoomRepository({
     }
   };
 
-  const persistSnapshot = async ({ state, previousCode }) => {
+  const persistSnapshot = async ({ state, previousCodes }) => {
     const saved = await safeCall(`save room ${state.code}`, null, (signal) =>
       supabase
         .from('rooms')
@@ -76,11 +78,12 @@ export function createRoomRepository({
     );
     if (!saved.ok) return false;
 
-    if (previousCode && previousCode !== state.code) {
+    for (const previousCode of previousCodes) {
       const deleted = await safeCall(`delete previous room ${previousCode}`, null, (signal) =>
         supabase.from('rooms').delete().eq('code', previousCode).abortSignal(signal)
       );
       if (!deleted.ok) return false;
+      retired.delete(previousCode);
     }
 
     return true;
@@ -90,11 +93,12 @@ export function createRoomRepository({
     Math.min(initialRetryMs * (2 ** Math.max(0, attempts - 1)), maximumRetryMs);
 
   const mergeFailedItem = (code, failedItem) => {
+    if (retired.has(code)) return;
     const newerItem = pending.get(code);
     const attempts = failedItem.attempts + 1;
     pending.set(code, {
       state: newerItem?.state || failedItem.state,
-      previousCode: newerItem?.previousCode || failedItem.previousCode,
+      previousCodes: [...new Set([...failedItem.previousCodes, ...(newerItem?.previousCodes || [])])],
       attempts,
       retryAt: now() + retryDelay(attempts)
     });
@@ -109,7 +113,9 @@ export function createRoomRepository({
       const item = pending.get(code);
       if (!item || (!force && item.retryAt > now())) continue;
       pending.delete(code);
+      inFlight.set(code, item);
       if (!(await persistSnapshot(item))) mergeFailedItem(code, item);
+      inFlight.delete(code);
     }
   };
 
@@ -148,9 +154,18 @@ export function createRoomRepository({
     if (!persistenceEnabled) return;
     const state = structuredClone(roomState);
     const queued = pending.get(state.code);
+    const previousItem = pending.get(previousCode) || inFlight.get(previousCode);
+    if (previousCode && previousCode !== state.code) {
+      retired.add(previousCode);
+      pending.delete(previousCode);
+    }
     pending.set(state.code, {
       state,
-      previousCode: previousCode || queued?.previousCode || null,
+      previousCodes: [...new Set([
+        ...(queued?.previousCodes || []),
+        ...(previousItem?.previousCodes || []),
+        ...(previousCode && previousCode !== state.code ? [previousCode] : [])
+      ])],
       attempts: queued?.attempts || 0,
       retryAt: queued?.retryAt || 0
     });
@@ -169,7 +184,7 @@ export function createRoomRepository({
 
     getStatus() {
       return {
-        pendingWrites: pending.size,
+        pendingWrites: pending.size + inFlight.size,
         retryScheduledAt: retryScheduledAt ? new Date(retryScheduledAt).toISOString() : null,
         lastSuccessAt,
         lastErrorAt
@@ -210,7 +225,7 @@ export function createRoomRepository({
 
     async flush() {
       clearRetryTimer();
-      if (drainPromise) await drainPromise;
+      while (drainPromise) await drainPromise;
       if (!pending.size) return;
 
       clearRetryTimer();

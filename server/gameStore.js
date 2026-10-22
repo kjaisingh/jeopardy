@@ -408,6 +408,20 @@ const buildAttemptOrder = (teams, selectedTeamId, settings) => {
   return Array.from({ length: settings.rounds }, () => orderedTeams).flat();
 };
 
+const assertCurrentAttempt = (room, context) => {
+  // Internal callers can omit context; socket actions always supply it.
+  if (context === undefined) return;
+  const active = room.activeQuestion;
+  if (!active || context.questionId !== active.id || context.attemptIndex !== active.attemptIndex) {
+    throw new Error('The turn changed. Review the current question and try again.');
+  }
+  if (active.deadlineAt && Date.now() >= active.deadlineAt) {
+    recordMiss(room, currentAttemptTeamId(active, room.settings), '', true);
+    void persistRoom(room);
+    throw new Error('Time expired. Review the current turn before answering.');
+  }
+};
+
 const resetForNewRound = (room, nextCode) => {
   room.code = nextCode;
   room.phase = 'lobby';
@@ -740,9 +754,10 @@ export const gameStore = {
     return publicRoom(room, hostPlayerId);
   },
 
-  async submitAttempt(rawCode, hostPlayerId, rawAnswer) {
+  async submitAttempt(rawCode, hostPlayerId, rawAnswer, context) {
     const room = await ensureRoom(rawCode);
     if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can submit attempts');
+    assertCurrentAttempt(room, context);
     if (!room.activeQuestion) throw new Error('No active question');
 
     const trimmedAnswer = typeof rawAnswer === 'string' ? rawAnswer.trim() : '';
@@ -770,9 +785,10 @@ export const gameStore = {
     return { room: publicRoom(room, hostPlayerId), result };
   },
 
-  async skipCurrentTeam(rawCode, hostPlayerId) {
+  async skipCurrentTeam(rawCode, hostPlayerId, context) {
     const room = await ensureRoom(rawCode);
     if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can skip a team');
+    assertCurrentAttempt(room, context);
     if (!room.activeQuestion) throw new Error('No active question');
 
     const active = room.activeQuestion;
@@ -807,9 +823,10 @@ export const gameStore = {
     return { code: room.code, result };
   },
 
-  async overrideLastIncorrect(rawCode, hostPlayerId) {
+  async overrideLastIncorrect(rawCode, hostPlayerId, context) {
     const room = await ensureRoom(rawCode);
     if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can override answers');
+    assertCurrentAttempt(room, context);
     if (!room.activeQuestion || !room.lastWrongAttempt) throw new Error('No incorrect attempt to override');
 
     const { teamId, teamName } = room.lastWrongAttempt;
@@ -819,9 +836,10 @@ export const gameStore = {
     return { room: publicRoom(room, hostPlayerId), result: { teamId, teamName, points } };
   },
 
-  async passActiveQuestion(rawCode, hostPlayerId) {
+  async passActiveQuestion(rawCode, hostPlayerId, context) {
     const room = await ensureRoom(rawCode);
     if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can pass questions');
+    assertCurrentAttempt(room, context);
     if (!room.activeQuestion) throw new Error('No active question');
 
     const { answer } = closeActiveQuestion(room, { solvedByTeamId: null, closedReason: 'passed' });
@@ -834,18 +852,21 @@ export const gameStore = {
     const room = await ensureRoom(rawCode);
     if (room.hostPlayerId !== hostPlayerId) throw new Error('Only host can restart game');
     if (room.phase !== 'finished') throw new Error('Game is not finished yet');
-
-    const oldCode = room.code;
-    const newCode = await generateUniqueCode();
-    rooms.delete(oldCode);
-    resetForNewRound(room, newCode);
-    rooms.set(newCode, room);
-
-    if (roomRepository.isEnabled()) {
-      roomRepository.renameRoom(oldCode, serializeRoom(room));
+    if (room.restarting) throw new Error('A new game is already being created.');
+    room.restarting = true;
+    try {
+      const oldCode = room.code;
+      const newCode = await generateUniqueCode();
+      rooms.delete(oldCode);
+      resetForNewRound(room, newCode);
+      rooms.set(newCode, room);
+      if (roomRepository.isEnabled()) {
+        roomRepository.renameRoom(oldCode, serializeRoom(room));
+      }
+      return { oldCode, newCode, room: publicRoom(room, hostPlayerId) };
+    } finally {
+      delete room.restarting;
     }
-
-    return { oldCode, newCode, room: publicRoom(room, hostPlayerId) };
   },
 
   disconnect(socketId) {

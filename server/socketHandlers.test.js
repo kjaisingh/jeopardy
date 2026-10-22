@@ -12,6 +12,89 @@ const SETTINGS = {
   questionsPerPlayer: 1
 };
 
+test('WebSocket handshakes reject untrusted browser origins', async () => {
+  const server = createAppServer();
+  const address = await server.start(0);
+  const socket = createClient(`http://127.0.0.1:${address.port}`, {
+    transports: ['websocket'], reconnection: false,
+    extraHeaders: { Origin: 'https://untrusted.example' }
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      socket.once('connect_error', resolve);
+      socket.once('connect', () => reject(new Error('Untrusted origin connected')));
+    });
+  } finally {
+    socket.disconnect();
+    await server.stop();
+  }
+});
+
+test('repeated session requests recover their original credentials', async () => {
+  const server = createAppServer();
+  const address = await server.start(0);
+  const socket = await connect(`http://127.0.0.1:${address.port}`);
+  try {
+    const payload = { name: 'Host', settings: SETTINGS };
+    const first = await request(socket, 'room:create', payload);
+    const retry = await request(socket, 'room:create', payload);
+    assert.equal(retry.ok, true);
+    assert.equal(retry.code, first.code);
+    assert.equal(retry.sessionToken, first.sessionToken);
+    assert.equal(retry.room.players.length, 1);
+    await request(socket, 'room:leave');
+    const resume = { code: first.code, sessionToken: first.sessionToken };
+    assert.equal((await request(socket, 'room:reconnect', resume)).ok, true);
+    assert.equal((await request(socket, 'room:reconnect', resume)).ok, true);
+  } finally {
+    socket.disconnect();
+    await server.stop();
+  }
+});
+
+for (const event of ['room:create', 'room:join', 'room:reconnect']) {
+  test(`${event} finishing after disconnect cannot leave a ghost connection`, async () => {
+    let release;
+    let liveSocketId = null;
+    let cleaned = false;
+    const establish = async (...args) => {
+      const socketId = args[event === 'room:create' ? 1 : 2];
+      await new Promise((resolve) => { release = resolve; });
+      liveSocketId = socketId;
+      return { code: 'ABC234', playerId: 'player', room: {} };
+    };
+    const store = {
+      createRoom: establish, joinRoom: establish, reconnect: establish,
+      roomViews: () => [], hostPromotionDelay: () => null,
+      disconnect: (socketId) => {
+        if (liveSocketId !== socketId) return null;
+        liveSocketId = null;
+        cleaned = true;
+        return { code: 'ABC234', wasHost: true };
+      },
+      pruneInactiveRooms: async () => {}, flushPersistence: async () => {}
+    };
+    const server = createAppServer({ store });
+    const address = await server.start(0);
+    const socket = await connect(`http://127.0.0.1:${address.port}`);
+    try {
+      socket.emit(event, { code: 'ABC234', name: 'Host', settings: SETTINGS, sessionToken: 'token' });
+      while (!release) await new Promise((resolve) => setTimeout(resolve, 5));
+      const disconnected = new Promise((resolve) => server.io.sockets.sockets.get(socket.id).once('disconnect', resolve));
+      socket.disconnect();
+      await disconnected;
+      release();
+      const deadline = Date.now() + 1000;
+      while (!cleaned && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+      assert.equal(cleaned, true);
+      assert.equal(liveSocketId, null);
+    } finally {
+      socket.disconnect();
+      await server.stop();
+    }
+  });
+}
+
 const request = (socket, event, payload = {}) =>
   new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error(`${event} timed out`)), 2000);
@@ -46,6 +129,7 @@ test('health reports persistence state with security headers', async () => {
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
       ok: true,
+      commit: process.env.RENDER_GIT_COMMIT || null,
       persistenceEnabled: true,
       persistence: { pendingWrites: 0, lastSuccessAt: null, lastErrorAt: null }
     });
@@ -285,7 +369,10 @@ test('restart rebinds every connected player to the new room code', async () => 
 
     for (const playerId of [created.playerId, joined.playerId]) {
       assert.equal((await request(host, 'question:select', { ownerPlayerId: playerId, value: 100 })).ok, true);
-      assert.equal((await request(host, 'question:pass')).ok, true);
+      const active = gameStore.roomViews(created.code).find((view) => view.socketId === host.id).room.activeQuestion;
+      assert.equal((await request(host, 'question:pass', {
+        questionId: active.id, attemptIndex: active.attemptIndex
+      })).ok, true);
     }
 
     const restarted = await request(host, 'game:restart');
