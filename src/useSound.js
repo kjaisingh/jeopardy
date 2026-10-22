@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { readStorage, writeStorage } from './browserStorage.js';
 
 const MUTE_KEY = 'jeopardy-muted';
 let audioContext = null;
@@ -102,7 +103,7 @@ const startPad = (ctx) => {
 
 export const useSound = (enabled) => {
   const available = Boolean(window.AudioContext || window.webkitAudioContext);
-  const [muted, setMuted] = useState(() => localStorage.getItem(MUTE_KEY) === 'true');
+  const [muted, setMuted] = useState(() => readStorage(MUTE_KEY) === 'true');
   const warmedRef = useRef(false);
   const stopPadRef = useRef(null);
 
@@ -141,7 +142,7 @@ export const useSound = (enabled) => {
   const toggleMuted = useCallback(() => {
     setMuted((current) => {
       const next = !current;
-      localStorage.setItem(MUTE_KEY, String(next));
+      writeStorage(MUTE_KEY, String(next));
       return next;
     });
   }, []);

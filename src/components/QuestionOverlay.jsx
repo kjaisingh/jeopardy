@@ -33,7 +33,8 @@ export function QuestionOverlay({
 
   useEffect(() => {
     const previouslyFocused = document.activeElement;
-    if (!isHost) cardRef.current?.focus();
+    const initialFocus = isHost ? cardRef.current?.querySelector('input') : cardRef.current;
+    initialFocus?.focus();
     const onKeyDown = (event) => {
       if (event.key !== 'Tab' || !cardRef.current) return;
       const focusable = Array.from(cardRef.current.querySelectorAll(FOCUSABLE_SELECTOR));
@@ -44,10 +45,10 @@ export function QuestionOverlay({
       }
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
+      if (event.shiftKey && (document.activeElement === first || !cardRef.current.contains(document.activeElement))) {
         event.preventDefault();
         last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
+      } else if (!event.shiftKey && (document.activeElement === last || !cardRef.current.contains(document.activeElement))) {
         event.preventDefault();
         first.focus();
       }

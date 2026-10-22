@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   isCompleteRoomCode,
   NAME_MAX,
@@ -32,23 +33,21 @@ export function HomeScreen({
   onResumePreviousGame,
   onLeaveCompletely
 }) {
-  return (
-    <div className="home-screen">
+  const [joinFirst] = useState(() => Boolean(joinCode));
+  const createForm = (
       <form
-        className="card home-card"
+        className="card home-card create-card"
         onSubmit={(event) => {
           event.preventDefault();
           if (createName.trim() && !busy) onCreateRoom();
         }}
       >
-        <div className="home-title-row">
-          <h1>Jeopardy</h1>
-          <button type="button" className="help-trigger" aria-label="How to play" onClick={onHelpOpen}>
-            ?
-          </button>
-        </div>
+        <span className="eyebrow">Be the host</span>
         <h2>Create a Game</h2>
+        <p className="subtitle">Make a room, share the code, and run the board.</p>
+        <label htmlFor="create-name">Your name</label>
         <input
+          id="create-name"
           value={createName}
           maxLength={NAME_MAX}
           placeholder="Your name"
@@ -74,17 +73,23 @@ export function HomeScreen({
           {busy === 'create' ? 'Creating…' : 'Create Game'}
         </button>
       </form>
-
+  );
+  const joinForm = (
       <form
-        className="card home-card"
+        className="card home-card join-card"
         onSubmit={(event) => {
           event.preventDefault();
           if (isCompleteRoomCode(joinCode) && joinName.trim() && !busy) onJoinRoom();
         }}
       >
+        <span className="eyebrow">Got an invite?</span>
         <h2>Join a Game</h2>
+        <p className="subtitle">Enter your host's six-character room code.</p>
         <div className="field-stack">
+          <label htmlFor="join-code">Room code</label>
           <input
+            id="join-code"
+            className="room-code-input"
             value={joinCode}
             maxLength={ROOM_CODE_LENGTH}
             placeholder="Room code"
@@ -95,7 +100,10 @@ export function HomeScreen({
             spellCheck={false}
             onChange={(event) => onJoinCodeChange(normalizeRoomCodeInput(event.target.value))}
           />
+          <label htmlFor="join-name">Your name</label>
           <input
+            id="join-name"
+            autoFocus={joinFirst}
             value={joinName}
             maxLength={NAME_MAX}
             placeholder="Your name"
@@ -110,10 +118,30 @@ export function HomeScreen({
         >
           {busy === 'join' ? 'Joining…' : 'Join Game'}
         </button>
+        <p className="join-note">Everyone joins from their own device. No account needed.</p>
       </form>
+  );
+  return (
+    <main className="home-screen">
+      <header className="home-hero">
+        <div className="home-title-row">
+          <span className="eyebrow">Your friends. Your questions.</span>
+          <button type="button" className="help-trigger" aria-label="How to play" onClick={onHelpOpen}>?</button>
+        </div>
+        <h1>Jeopardy<span className="hero-dot">.</span></h1>
+        <p>Find out who knows your group best.</p>
+        <ol className="home-steps" aria-label="How it works">
+          <li>Invite your friends</li>
+          <li>Write your questions</li>
+          <li>Team up and play</li>
+        </ol>
+      </header>
+      <div className="home-forms">
+        {joinFirst ? <>{joinForm}{createForm}</> : <>{createForm}{joinForm}</>}
+      </div>
 
       {canResume && (
-        <div className="card home-card">
+        <section className="card home-card resume-card">
           <h2>Resume</h2>
           <p>Room {session.code}</p>
           <button type="button" disabled={Boolean(busy)} onClick={onResumePreviousGame}>
@@ -122,8 +150,8 @@ export function HomeScreen({
           <button type="button" className="subtle" disabled={Boolean(busy)} onClick={onLeaveCompletely}>
             Forget Saved Session
           </button>
-        </div>
+        </section>
       )}
-    </div>
+    </main>
   );
 }

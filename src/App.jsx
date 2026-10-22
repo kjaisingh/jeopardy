@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { ResultsScreen } from './ResultsScreen.jsx';
 import { HelpModal } from './components/HelpModal.jsx';
@@ -30,6 +30,7 @@ import {
 import { clearDrafts, loadDrafts, saveDrafts } from './draftStorage.js';
 import { formatMoney } from './format.js';
 import { call, socket } from './clientTransport.js';
+import { loadSession, writeStorage, removeStorage } from './browserStorage.js';
 
 const STORAGE_KEY = 'jeopardy-session';
 
@@ -50,13 +51,8 @@ const copyText = async (text) => {
 };
 
 function App() {
-  const [session, setSession] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
-    } catch {
-      return null;
-    }
-  });
+  const [session, setSession] = useState(() => loadSession(STORAGE_KEY));
+  const [storageUnavailable, setStorageUnavailable] = useState(false);
   const [room, setRoom] = useState(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -70,6 +66,8 @@ function App() {
   const suppressAutoResumeRef = useRef(suppressAutoResume);
   const pendingDetachRef = useRef(Promise.resolve());
   const pendingLeaveRef = useRef(Promise.resolve());
+  const sessionGenerationRef = useRef(0);
+  const resumingRef = useRef(false);
 
   useEffect(() => {
     sessionRef.current = session;
@@ -144,31 +142,38 @@ function App() {
   };
 
   const reconnectSession = async (nextSession) => {
+    if (resumingRef.current) return false;
     if (!nextSession?.code || !nextSession?.playerId) return false;
     if (!nextSession.sessionToken) {
       setSession(null);
       setError('Your saved session is invalid. Rejoin the room to continue.');
       return false;
     }
+    const generation = sessionGenerationRef.current;
+    resumingRef.current = true;
     try {
       const response = await call('room:reconnect', {
         code: nextSession.code,
         sessionToken: nextSession.sessionToken
       });
+      if (generation !== sessionGenerationRef.current) return false;
       setRoom(response.room);
       setFlashCursor(tailSeq(response.room.events));
       const rejoinedMe = response.room.players.find((player) => player.id === nextSession.playerId);
-      if (rejoinedMe?.questions?.length) {
-        setDrafts(rejoinedMe.questions.map((question) => ({ localId: crypto.randomUUID(), ...question })));
-      } else {
-        const savedDrafts = loadDrafts(nextSession);
-        if (savedDrafts.length) setDrafts(savedDrafts);
-      }
+      const savedDrafts = loadDrafts(nextSession);
+      const submittedDrafts = (rejoinedMe?.questions || []).map((question) => ({ localId: crypto.randomUUID(), ...question }));
+      setDrafts((current) => reconcileDrafts(
+        current.length ? current : savedDrafts.length ? savedDrafts : submittedDrafts,
+        response.room.settings.questionsPerPlayer
+      ));
+      if (savedDrafts.length && rejoinedMe?.submitted) setEditingQuestions(true);
       setError('');
       return true;
     } catch (requestError) {
       setError(`Could not rejoin ${nextSession.code}: ${requestError.message}`);
       return false;
+    } finally {
+      resumingRef.current = false;
     }
   };
 
@@ -246,12 +251,13 @@ function App() {
   }, [notice]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+    const saved = session ? writeStorage(STORAGE_KEY, JSON.stringify(session)) : removeStorage(STORAGE_KEY);
+    setStorageUnavailable(Boolean(session) && !saved);
   }, [session]);
 
   useEffect(() => {
     const onRoom = (nextRoom) => {
-      if (suppressAutoResumeRef.current) return;
+      if (suppressAutoResumeRef.current || resumingRef.current) return;
       setRoom(nextRoom);
       setError('');
     };
@@ -306,9 +312,14 @@ function App() {
     if (room?.code && prevRoomCodeRef.current && room.code !== prevRoomCodeRef.current) {
       setFlash(null);
       setFlashCursor(null);
+      clearDrafts({ code: prevRoomCodeRef.current, playerId: sessionRef.current?.playerId });
+      setDrafts(blankDraft(room.settings.questionsPerPlayer));
+      setEditingQuestions(false);
+      setInvalidDraftIds(new Set());
+      setTeamConfig([]);
     }
     prevRoomCodeRef.current = room?.code;
-  }, [room?.code]);
+  }, [room?.code, room?.settings.questionsPerPlayer]);
 
   const teamCount = room?.players?.length
     ? Math.min(Math.max(Math.floor(Number(teamCountInput)) || 1, 1), room.players.length)
@@ -346,9 +357,9 @@ function App() {
   }, [room?.settings?.questionsPerPlayer]);
 
   useEffect(() => {
-    if (!session || !room || room.phase !== 'lobby' || me?.submitted || !drafts.length) return;
+    if (!session || !room || session.code !== room.code || room.phase !== 'lobby' || (me?.submitted && !editingQuestions) || !drafts.length) return;
     saveDrafts(session, drafts);
-  }, [drafts, me?.submitted, room, session]);
+  }, [drafts, me?.submitted, editingQuestions, room, session]);
 
   useEffect(() => {
     if (!isHost || room?.phase !== 'lobby') {
@@ -361,6 +372,7 @@ function App() {
   }, [isHost, room?.phase, room?.code]);
 
   const resetToHome = () => {
+    sessionGenerationRef.current += 1;
     setRoom(null);
     setError('');
     setNotice('');
@@ -451,9 +463,10 @@ function App() {
 
   const resumePreviousGame = () => run('resume', async () => {
     await pendingDetachRef.current;
-    await reconnectSession(session);
-    suppressAutoResumeRef.current = false;
-    setSuppressAutoResume(false);
+    if (await reconnectSession(session)) {
+      suppressAutoResumeRef.current = false;
+      setSuppressAutoResume(false);
+    }
   });
 
   const submitQuestions = () => run('submit-questions', async () => {
@@ -589,7 +602,7 @@ function App() {
     run('attempt', async () => {
       const answer = activeAnswerInput;
       await call('question:attempt', { answer, ...attemptContext() });
-      setActiveAnswerInput('');
+      setActiveAnswerInput((current) => current === answer ? '' : current);
     });
 
   const attemptContext = () => ({
@@ -613,11 +626,11 @@ function App() {
 
   const restartGame = () =>
     run('restart', async () => {
+      await call('game:restart', {});
       clearDrafts(session);
       setDrafts(blankDraft(room.settings.questionsPerPlayer));
       setEditingQuestions(false);
       setInvalidDraftIds(new Set());
-      await call('game:restart', {});
     });
 
   const copyRoomCode = async () => {
@@ -652,12 +665,16 @@ function App() {
 
   const canResume = Boolean(session?.code && session?.playerId && session?.sessionToken && !room);
 
-  const helpFragment = helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />;
-  const connectionFragment = !connected && (
+  const closeHelp = useCallback(() => setHelpOpen(false), []);
+  const helpFragment = helpOpen && <HelpModal onClose={closeHelp} />;
+  const connectionFragment = <>
+    {storageUnavailable && <div className="storage-warning" role="status">Browser storage unavailable. Keep this tab open to stay in your game.</div>}
+    {!connected && (
     <div className="pill offline connection-pill" role="status">
-      {everConnected ? 'Reconnecting…' : 'Connecting…'}
+      {everConnected ? 'Reconnecting… Your game will resume automatically.' : 'Connecting… The server may take a minute to wake up.'}
     </div>
-  );
+    )}
+  </>;
 
   if (superseded) {
     return (

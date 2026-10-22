@@ -9,8 +9,8 @@ Jeopardy is a private, real-time game where players write the questions and play
 - Create a room and invite players with a code, link, or QR code.
 - Write questions for each point value, then assign teams manually or shuffle them.
 - Play with optional Daily Double, answer timer, and finite or unlimited team attempts.
-- Let the host judge or override answers, manage turns, and view final standings and question highlights.
-- Save question drafts locally and resume a private session on another device.
+- Let the host judge or override answers, manage turns, and view standings and completed-question recaps.
+- Save question drafts and edits locally, then resume in the same browser.
 - Restart a game with the same group.
 
 ## Architecture
@@ -39,7 +39,11 @@ Jeopardy is a private, real-time game where players write the questions and play
    ```
 
 3. For durable rooms, create a Supabase project, run [`supabase/schema.sql`](supabase/schema.sql) in its SQL Editor, and set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in `.env`.
-4. Deploy a single instance with the [Render Blueprint](render.yaml). Set `CLIENT_URL` to its public HTTPS origin and add the Supabase values if using persistence.
+4. Deploy a single instance with the [Render Blueprint](render.yaml). Set `CLIENT_URL` to its public HTTPS origin and add the Supabase values if using persistence. `/health` reports the deployed commit and persistence status.
+
+## Checks
+
+Run `npm run lint`, `npm test`, and `npm run build`. For the multiplayer browser test, install Chromium with `npx playwright install chromium`, stop any local server on port 3001, then run `npm run test:e2e`. Tests use in-memory rooms and never connect to Supabase.
 
 ## Feature backlog
 

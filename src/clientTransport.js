@@ -12,21 +12,25 @@ export const createRequest = (socketClient, timeoutMs = 8000) => (event, payload
     }
 
     let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      reject(new Error('Server did not respond in time. Check your connection and try again.'));
-    }, timeoutMs);
-
-    socketClient.emit(event, payload, (response) => {
+    let timer;
+    const finish = (error, response) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      socketClient.off('disconnect', onDisconnect);
+      if (error) reject(error);
+      else resolve(response);
+    };
+    const onDisconnect = () => finish(new Error('Connection lost. Wait for your game to reconnect before trying again.'));
+    socketClient.once('disconnect', onDisconnect);
+    timer = setTimeout(() => finish(new Error('Server did not respond in time. Check your connection and try again.')), timeoutMs);
+
+    socketClient.emit(event, payload, (response) => {
       if (!response?.ok) {
-        reject(new Error(response?.message || 'Operation failed'));
+        finish(new Error(response?.message || 'Operation failed'));
         return;
       }
-      resolve(response);
+      finish(null, response);
     });
   });
 

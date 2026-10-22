@@ -12,7 +12,7 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "test": "env -u SUPABASE_URL -u SUPABASE_SERVICE_ROLE_KEY HOST_GRACE_MS=50 node --test server/*.test.js src/*.test.js",
-    "test:e2e": "VITE_E2E_TIMER_SECONDS=1 VITE_SERVER_URL=http://localhost:3001 npm run build && node e2e/smoke.js"
+    "test:e2e": "VITE_E2E_TIMER_SECONDS=3 VITE_SERVER_URL=http://localhost:3001 npm run build && node e2e/smoke.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.3",

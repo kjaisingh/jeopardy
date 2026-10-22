@@ -1,3 +1,5 @@
+import { QuestionRecap } from './QuestionRecap.jsx';
+
 export function BoardScreen({
   room,
   currentTeam,
@@ -9,6 +11,8 @@ export function BoardScreen({
   busy,
   onSelectQuestion
 }) {
+  const cells = room.board.columns.flatMap((column) => column.cells);
+  const completed = cells.filter((cell) => cell.status === 'closed').length;
   return (
     <section className="card">
       <div className="board-top">
@@ -21,6 +25,10 @@ export function BoardScreen({
       </div>
 
       <div className="score-row">{room.teams.map((team) => renderScoreCard(team, true))}</div>
+      <div className="board-progress">
+        <span>{completed} of {cells.length} questions played</span>
+        {!isHost && <span>The host selects questions and enters team answers.</span>}
+      </div>
 
       <div className="board-scroll" role="region" aria-label="Question board" tabIndex={0}>
         <div className="board-grid">
@@ -45,6 +53,7 @@ export function BoardScreen({
         ))}
         </div>
       </div>
+      <QuestionRecap history={room.history} />
     </section>
   );
 }

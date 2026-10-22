@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 
 const PORT = 3001;
 const BASE_URL = `http://localhost:${PORT}`;
-const TIMER_SECONDS = 1;
+const TIMER_SECONDS = 3;
 
 const log = (msg) => console.log(`[e2e] ${msg}`);
 
@@ -52,14 +52,32 @@ async function main() {
 
     browser = await chromium.launch();
     const hostCtx = await browser.newContext();
-    const p2Ctx = await browser.newContext();
+    const p2Ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
     const p3Ctx = await browser.newContext();
     const host = await hostCtx.newPage();
     const p2 = await p2Ctx.newPage();
     const p3 = await p3Ctx.newPage();
     const players = [host, p2, p3];
-
+    const browserErrors = [];
+    for (const page of players) {
+      page.on('pageerror', (error) => browserErrors.push(error.message));
+    }
     await Promise.all(players.map((page) => page.goto(BASE_URL)));
+
+    const blockedStorage = await browser.newContext();
+    await blockedStorage.addInitScript(() => {
+      Object.defineProperty(globalThis, 'localStorage', { get() { throw new Error('Storage blocked'); } });
+    });
+    const blockedPage = await blockedStorage.newPage();
+    blockedPage.on('pageerror', (error) => browserErrors.push(error.message));
+    await blockedPage.goto(BASE_URL);
+    const blockedCreate = blockedPage.locator('.create-card');
+    await blockedCreate.getByLabel('Your name').fill('No Storage');
+    await blockedCreate.getByRole('button', { name: 'Create Game' }).click();
+    await blockedPage.locator('.room-code').waitFor();
+    await blockedPage.getByText('Browser storage unavailable.', { exact: false }).waitFor();
+    await blockedStorage.close();
+    log('blocked browser storage does not crash creation or gameplay');
 
     // --- create room (host) ---
     log('host creating room');
@@ -81,6 +99,15 @@ async function main() {
 
     // --- join (2 players) ---
     for (const [page, name] of [[p2, 'Player Two'], [p3, 'Player Three']]) {
+      if (page === p2) {
+        await page.goto(`${BASE_URL}/?join=${roomCode}`);
+        await page.getByLabel('Your name', { exact: true }).last().waitFor();
+        assert.equal(await page.locator('#join-name').evaluate((input) => input === globalThis.document.activeElement), true);
+        const joinBox = await page.locator('.join-card').boundingBox();
+        const createBox = await page.locator('.create-card').boundingBox();
+        assert.ok(joinBox.y < createBox.y, 'invite link should put joining first on mobile');
+        assert.equal(await page.evaluate(() => globalThis.document.documentElement.scrollWidth <= globalThis.innerWidth), true);
+      }
       const joinCard = page.locator('.home-card').filter({ hasText: 'Join a Game' });
       await joinCard.getByLabel('Room code').fill(roomCode);
       await joinCard.getByLabel('Your name').fill(name);
@@ -135,9 +162,17 @@ async function main() {
     await submitQuestions(p3, 'Player Three');
     log('all questions submitted');
 
+    await host.getByRole('button', { name: 'Edit My Questions' }).click();
+    await host.locator('.question-card').first().locator('textarea').fill('Revised clue survives reload');
+    await host.reload();
+    await host.locator('.question-card').first().waitFor();
+    assert.equal(await host.locator('.question-card').first().locator('textarea').inputValue(), 'Revised clue survives reload');
+    await host.getByRole('button', { name: 'Submit My Questions' }).click();
+    log('edits to submitted questions survive reload');
+
     // --- advance to team setup (host) ---
     const continueBtn = host.getByRole('button', { name: 'Continue to Team Setup' });
-    await continueBtn.waitFor({ state: 'visible' });
+    await host.locator('button:enabled').filter({ hasText: 'Continue to Team Setup' }).waitFor();
     assert.equal(await continueBtn.isDisabled(), false, 'continue-to-team-setup should be enabled once everyone submitted');
     await continueBtn.click();
     await Promise.all(players.map((page) => page.getByRole('heading', { name: 'Team Setup' }).waitFor()));
@@ -256,6 +291,8 @@ async function main() {
         }
 
         await dismissFlash(host);
+        const recapAnswers = await Promise.all(players.map((page) => page.locator('.question-recap > p strong').textContent()));
+        assert.deepEqual(recapAnswers, [correctAnswer, correctAnswer, correctAnswer]);
         cellIndex += 1;
       }
     }
@@ -275,12 +312,16 @@ async function main() {
     await Promise.all(players.map((page) => page.getByRole('heading', { name: 'Question Submission' }).waitFor()));
     const newRoomCode = (await host.locator('.room-code').textContent()).trim();
     assert.notEqual(newRoomCode, roomCode, 'restart should issue a new room code');
+    for (const page of players) {
+      assert.equal(await page.locator('.question-card').first().locator('textarea').inputValue(), '', 'a new round starts with fresh questions');
+    }
     log(`restart confirmed: new room ${newRoomCode}, all contexts back at lobby`);
 
     await submitQuestions(p2, 'Player Two');
     await host.getByText('Player Two · Ready').waitFor();
     log('non-host session remained authorized after restart');
 
+    assert.deepEqual(browserErrors, [], 'browser should not report uncaught errors');
     log('SMOKE TEST PASSED');
   } finally {
     await browser?.close();

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { buildStandings, buildStats } from './gameStats.js';
 import { formatMoney } from './format.js';
+import { QuestionRecap } from './components/QuestionRecap.jsx';
 
 export function ResultsScreen({
   room,
@@ -161,6 +162,7 @@ export function ResultsScreen({
         )}
       </div>
 
+      <QuestionRecap history={room.history} />
       <div className="results-actions">
         {isHost ? (
           <>
