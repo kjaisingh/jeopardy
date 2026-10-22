@@ -67,7 +67,8 @@ export function HelpModal({ onClose }) {
           <h3>Answering a Question</h3>
           <ul>
             <li>
-              <strong>Submit:</strong> lock in your team's typed answer for judging.
+              <strong>Submit:</strong> the host types the answering team's response. Answers are checked automatically;
+              the host can override a mistaken rejection.
             </li>
             <li>
               <strong>Override Previous:</strong> appears after an incorrect attempt, lets the host mark that

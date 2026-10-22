@@ -82,6 +82,7 @@ export function createAppServer({
   const syncQuestionTimer = (code) => {
     clearTimeout(timers.get(code));
     timers.delete(code);
+    if (!store.roomViews(code).length) return;
     const active = store.activeTimer(code);
     if (!active) return;
 
@@ -334,6 +335,7 @@ export function createAppServer({
       socket.data.session = null;
       if (result) {
         sendRoom(result.code);
+        syncQuestionTimer(result.code);
         if (result.wasHost) scheduleHostPromotion(result.code);
       }
       return {};
@@ -355,6 +357,7 @@ export function createAppServer({
           hostPromotionTimers.delete(result.code);
         }
         sendRoom(result.code);
+        syncQuestionTimer(result.code);
       }
       return {};
     });
@@ -364,6 +367,7 @@ export function createAppServer({
       socket.data.session = null;
       if (!result) return;
       sendRoom(result.code);
+      syncQuestionTimer(result.code);
       if (result.wasHost) scheduleHostPromotion(result.code);
     });
   });

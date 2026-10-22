@@ -106,6 +106,7 @@ function App() {
   const [flashCursor, setFlashCursor] = useState(null);
 
   const [superseded, setSuperseded] = useState(false);
+  const supersededRef = useRef(false);
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [helpOpen, setHelpOpen] = useState(false);
   const [connected, setConnected] = useState(socket.connected);
@@ -264,10 +265,13 @@ function App() {
     const onConnect = () => {
       setEverConnected(true);
       setConnected(true);
-      if (!suppressAutoResumeRef.current && sessionRef.current) reconnectSession(sessionRef.current);
+      if (!suppressAutoResumeRef.current && !supersededRef.current && sessionRef.current) reconnectSession(sessionRef.current);
     };
     const onDisconnect = () => setConnected(false);
-    const onSuperseded = () => setSuperseded(true);
+    const onSuperseded = () => {
+      supersededRef.current = true;
+      setSuperseded(true);
+    };
     const onKicked = () => {
       suppressAutoResumeRef.current = true;
       resetToHome();
@@ -394,6 +398,7 @@ function App() {
     setFlash(null);
     setFlashCursor(null);
     setSuperseded(false);
+    supersededRef.current = false;
     setQrDataUrl('');
     setSuppressAutoResume(true);
   };
@@ -415,6 +420,7 @@ function App() {
   };
 
   const createRoom = () => run('create', async () => {
+    await pendingDetachRef.current;
     await pendingLeaveRef.current;
     suppressAutoResumeRef.current = false;
     setSuppressAutoResume(false);
@@ -438,6 +444,7 @@ function App() {
   });
 
   const joinRoom = () => run('join', async () => {
+    await pendingDetachRef.current;
     await pendingLeaveRef.current;
     suppressAutoResumeRef.current = false;
     setSuppressAutoResume(false);
@@ -652,8 +659,10 @@ function App() {
   };
 
   const useHere = () => run('use-here', async () => {
-    setSuperseded(false);
-    await reconnectSession(session);
+    if (await reconnectSession(session)) {
+      supersededRef.current = false;
+      setSuperseded(false);
+    }
   });
 
   const goHome = () => {

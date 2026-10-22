@@ -1,10 +1,15 @@
 const STOP_WORDS = new Set(['a', 'an', 'the', 'of', 'in', 'on', 'at', 'to', 'for']);
+const NUMBER_PATTERN = /[+-]?\d+(?:,\d{3})*(?:\.\d+)?/g;
+const normalizeNumber = (number) => number.replaceAll(',', '').replace(/^\+/, '')
+  .replace(/^(-?)0+(?=\d)/, '$1').replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
 
 const normalize = (value) =>
   (value || '')
     .toLowerCase()
     .normalize('NFKD')
-    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(NUMBER_PATTERN, normalizeNumber)
+    .replace(/\p{M}/gu, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -63,6 +68,8 @@ const jaccardTokens = (left, right) => {
 };
 
 export const isAnswerCorrect = (submitted, expected) => {
+  const numbers = (value) => (value.match(NUMBER_PATTERN) || []).map(normalizeNumber);
+  if (!tokensEqual(numbers(submitted), numbers(expected))) return false;
   const candidate = normalize(submitted);
   const answer = normalize(expected);
 
@@ -71,6 +78,10 @@ export const isAnswerCorrect = (submitted, expected) => {
 
   const candidateContent = stripStopWords(tokenize(candidate));
   const answerContent = stripStopWords(tokenize(answer));
+  const negations = new Set(['no', 'not', 'never', 'without']);
+  const candidateNegations = candidateContent.filter((token) => negations.has(token));
+  const answerNegations = answerContent.filter((token) => negations.has(token));
+  if (!tokensEqual(candidateNegations, answerNegations)) return false;
 
   if (candidateContent.length && tokensEqual(candidateContent, answerContent)) return true;
   if (candidateContent.length && answerContent.length && guardedContainment(candidateContent, answerContent)) {

@@ -10,6 +10,25 @@ import {
 } from './validate.js';
 import { gameStore } from './gameStore.js';
 
+test('answer matching preserves numbers, signs, negation, and non-Latin text', () => {
+  for (const [submitted, expected] of [
+    ['123456', '123457'], ['-5', '5'], ['Apollo 11', 'Apollo 12'],
+    ['not Paris', 'Paris'], ['Paris', 'not Paris'], ['no New York City', 'New York City']
+  ]) assert.equal(isAnswerCorrect(submitted, expected), false, `${submitted} must not match ${expected}`);
+  for (const [submitted, expected] of [
+    ['北京', '北京'], ['São Paulo', 'Sao Paulo'], ['Beyoncé', 'Beyonce'],
+    ['$1,000', '1000'], ['+5', '5'], ['Paris', 'Pariss']
+  ]) assert.equal(isAnswerCorrect(submitted, expected), true, `${submitted} should match ${expected}`);
+});
+
+test('numeric fields reject missing and coerced boolean or array values', () => {
+  for (const value of ['', ' ', null, false, true, [], [1], {}]) {
+    assert.throws(() => requiredInteger(value, 'Score'), /whole number/);
+  }
+  assert.equal(requiredInteger('0', 'Score'), 0);
+  assert.equal(requiredInteger(-25, 'Score'), -25);
+});
+
 test('stale actions never change the next team or question', async () => {
   const { code, hostPlayerId } = await setupGame();
   const selected = await gameStore.selectQuestion(code, hostPlayerId, hostPlayerId, 100);

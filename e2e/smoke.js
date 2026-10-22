@@ -1,19 +1,9 @@
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
 import assert from 'node:assert/strict';
 
-// Multi-user smoke test: drives a real server + real Chromium contexts (host
-// + 2 players) through a full game — lobby, questions, teams, a full board
-// (daily double, a steal, a timer expiry), results, and restart — asserting
-// state stays in sync across every context.
-//
-// Runs the production server (dist + Socket.IO) on port 3001, matching the
-// VITE_SERVER_URL baked into the build by the local .env, with CLIENT_URL
-// set to the same origin so the server's CORS allowlist admits it.
-// Usage: npm run build && node e2e/smoke.js
-
-const PORT = 3001;
-const BASE_URL = `http://localhost:${PORT}`;
+// Local multiplayer coverage with isolated, in-memory rooms. Run npm run test:e2e.
 const TIMER_SECONDS = 3;
 
 const log = (msg) => console.log(`[e2e] ${msg}`);
@@ -33,20 +23,36 @@ async function waitForHealth(url, timeoutMs = 15000) {
 }
 
 async function main() {
+  const probe = createServer();
+  await new Promise((resolve) => probe.listen(0, resolve));
+  const PORT = probe.address().port;
+  await new Promise((resolve) => probe.close(resolve));
+  const BASE_URL = `http://localhost:${PORT}`;
   log(`starting server on :${PORT}`);
   const testEnv = { ...process.env };
   delete testEnv.SUPABASE_URL;
   delete testEnv.SUPABASE_SERVICE_ROLE_KEY;
   const server = spawn('node', ['server/index.js'], {
     env: { ...testEnv, PORT: String(PORT), CLIENT_URL: BASE_URL },
-    stdio: 'inherit'
-  });
-  server.on('error', (error) => {
-    throw error;
+    stdio: ['ignore', 'pipe', 'inherit']
   });
 
   let browser;
   try {
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Test server did not start')), 15000);
+      let output = '';
+      server.stdout.on('data', (chunk) => {
+        process.stdout.write(chunk);
+        output += chunk.toString();
+        if (output.includes(`Jeopardy server listening on port ${PORT}`)) {
+          clearTimeout(timeout);
+          resolve();
+        }
+      });
+      server.once('error', (error) => { clearTimeout(timeout); reject(error); });
+      server.once('exit', (code) => { clearTimeout(timeout); reject(new Error(`Test server exited: ${code}`)); });
+    });
     await waitForHealth(BASE_URL);
     log('server healthy');
 
@@ -325,7 +331,11 @@ async function main() {
     log('SMOKE TEST PASSED');
   } finally {
     await browser?.close();
-    server.kill();
+    if (server.exitCode === null) {
+      const exited = new Promise((resolve) => server.once('exit', resolve));
+      server.kill();
+      await exited;
+    }
   }
 }
 

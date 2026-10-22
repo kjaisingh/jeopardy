@@ -18,6 +18,9 @@ export const requiredText = (value, label, { min = 1, max = Infinity } = {}) => 
 };
 
 export const requiredInteger = (value, label, { min = -Infinity, max = Infinity } = {}) => {
+  if (typeof value !== 'number' && (typeof value !== 'string' || !value.trim())) {
+    throw new Error(`${label} must be a whole number`);
+  }
   const number = Number(value);
   if (!Number.isInteger(number)) throw new Error(`${label} must be a whole number`);
   if (number < min || number > max) throw new Error(`${label} must be between ${min} and ${max}`);

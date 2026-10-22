@@ -43,7 +43,7 @@ Jeopardy is a private, real-time game where players write the questions and play
 
 ## Checks
 
-Run `npm run lint`, `npm test`, and `npm run build`. For the multiplayer browser test, install Chromium with `npx playwright install chromium`, stop any local server on port 3001, then run `npm run test:e2e`. Tests use in-memory rooms and never connect to Supabase.
+Run `npm run lint`, `npm test`, and `npm run build`. For the multiplayer browser test, install Chromium with `npx playwright install chromium`, then run `npm run test:e2e`. Tests use a temporary local port and in-memory rooms; they never connect to Supabase.
 
 ## Feature backlog
 

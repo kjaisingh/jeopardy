@@ -12,6 +12,33 @@ const SETTINGS = {
   questionsPerPlayer: 1
 };
 
+test('empty rooms stop ticking and resume their overdue attempt on reconnect', async () => {
+  const server = createAppServer();
+  const address = await server.start(0);
+  const socket = await connect(`http://127.0.0.1:${address.port}`);
+  try {
+    const created = await request(socket, 'room:create', {
+      name: 'Host', settings: { ...SETTINGS, mode: 'infinite', timerSeconds: 1 }
+    });
+    await request(socket, 'questions:submit', { questions: [{ value: 100, prompt: 'Clue', answer: 'Answer' }] });
+    await request(socket, 'lobby:continue');
+    await request(socket, 'game:configure', { config: { teams: [{ name: 'Team', playerIds: [created.playerId] }] } });
+    await request(socket, 'question:select', { ownerPlayerId: created.playerId, value: 100 });
+    await request(socket, 'room:leave');
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    assert.equal(gameStore.activeTimer(created.code).attemptIndex, 0);
+    await request(socket, 'room:reconnect', { code: created.code, sessionToken: created.sessionToken });
+    const deadline = Date.now() + 500;
+    while (gameStore.activeTimer(created.code).attemptIndex === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(gameStore.activeTimer(created.code).attemptIndex, 1);
+  } finally {
+    socket.disconnect();
+    await server.stop();
+  }
+});
+
 test('WebSocket handshakes reject untrusted browser origins', async () => {
   const server = createAppServer();
   const address = await server.start(0);

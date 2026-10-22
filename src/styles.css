@@ -1150,17 +1150,26 @@ button.danger {
   background: var(--bg-cell-dark);
 }
 
-.timer-track::-webkit-progress-value,
+.timer-track::-webkit-progress-value {
+  background: linear-gradient(90deg, var(--success), #2f9e6c);
+}
+
 .timer-track::-moz-progress-bar {
   background: linear-gradient(90deg, var(--success), #2f9e6c);
 }
 
-.timer-track.warn::-webkit-progress-value,
+.timer-track.warn::-webkit-progress-value {
+  background: linear-gradient(90deg, var(--warn), #c98a1f);
+}
+
 .timer-track.warn::-moz-progress-bar {
   background: linear-gradient(90deg, var(--warn), #c98a1f);
 }
 
-.timer-track.danger::-webkit-progress-value,
+.timer-track.danger::-webkit-progress-value {
+  background: linear-gradient(90deg, var(--danger-red), var(--danger-red-dark));
+}
+
 .timer-track.danger::-moz-progress-bar {
   background: linear-gradient(90deg, var(--danger-red), var(--danger-red-dark));
 }
