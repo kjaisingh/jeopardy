@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   test-and-build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -39,8 +39,10 @@ jobs:
       - name: Build client bundle
         run: npm run build
 
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+      - name: Check runner Chrome
+        run: google-chrome --version
 
       - name: Run multiplayer smoke test
+        env:
+          PLAYWRIGHT_CHANNEL: chrome
         run: npm run test:e2e

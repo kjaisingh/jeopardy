@@ -331,6 +331,7 @@ function App() {
 
   useEffect(() => {
     if (!room || room.phase !== 'team-setup' || !isHost) return;
+    if (Number(teamCountInput) > room.players.length) setTeamCountInput(String(room.players.length));
     setTeamConfig((current) => {
       const currentIds = new Set(room.players.map((player) => player.id));
       const configuredIds = new Set(current.flatMap((team) => team.playerIds));
@@ -340,7 +341,7 @@ function App() {
       if (current.length === 0) return buildTeams(teamCount, room.players);
       return reconcileTeams(current, teamCount, room.players);
     });
-  }, [room, isHost, teamCount]);
+  }, [room, isHost, teamCount, teamCountInput]);
 
   useEffect(() => {
     if (scoreEditMode) return;

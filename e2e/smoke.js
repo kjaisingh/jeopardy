@@ -56,7 +56,7 @@ async function main() {
     await waitForHealth(BASE_URL);
     log('server healthy');
 
-    browser = await chromium.launch();
+    browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL || undefined });
     const hostCtx = await browser.newContext();
     const p2Ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
     const p3Ctx = await browser.newContext();
