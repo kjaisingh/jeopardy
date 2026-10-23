@@ -691,6 +691,7 @@ function App() {
       <div className="app">
         {connectionFragment}
         <SupersededScreen busy={busy} onUseHere={useHere} onLeave={leaveCompletely} />
+        {error && <div className="error sticky" role="alert">{error}</div>}
       </div>
     );
   }
